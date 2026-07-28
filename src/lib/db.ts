@@ -18,7 +18,7 @@ db.version(2).stores({
   categories: '++id, name, sortOrder, deletedAt',
   projects: '++id, categoryId, name, createdAt, deletedAt',
   ideas: '++id, projectId, title, createdAt, updatedAt, *tags, isFavorite, deletedAt',
-  _snapshots: '++id, createdAt',
+  snapshots: '++id, createdAt',
 }).upgrade(async (trans) => {
   await trans.table('ideas').toCollection().modify((idea: any) => {
     if (idea.isFavorite === undefined) idea.isFavorite = false;
