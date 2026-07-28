@@ -3,6 +3,7 @@ export interface Category {
   name: string;
   icon: string;       // lucide icon name, e.g. "folder", "globe"
   sortOrder: number;
+  deletedAt?: Date;
 }
 
 export interface Project {
@@ -11,6 +12,7 @@ export interface Project {
   name: string;
   description: string;
   createdAt: Date;
+  deletedAt?: Date;
 }
 
 export interface Idea {
@@ -21,4 +23,12 @@ export interface Idea {
   tags: string[];
   createdAt: Date;
   updatedAt: Date;
+  isFavorite?: boolean;
+  deletedAt?: Date;
+}
+
+export interface Snapshot {
+  id?: number;
+  createdAt: Date;
+  data: string;
 }

@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { toast } from 'sonner';
 import {
   Dialog,
@@ -31,9 +31,29 @@ export function VariableDialog({ open, onOpenChange, prompt }: VariableDialogPro
 
   const [values, setValues] = useState<Record<string, string>>(() => {
     const init: Record<string, string> = {};
-    variables.forEach(v => { init[v] = ''; });
+    variables.forEach(v => {
+      try {
+        init[v] = localStorage.getItem(`spark-vault-var-${v}`) || '';
+      } catch {
+        init[v] = '';
+      }
+    });
     return init;
   });
+
+  // 当 variables 变化时（Dialog 打开），从 localStorage 重新初始化
+  useEffect(() => {
+    if (variables.length === 0) return;
+    const init: Record<string, string> = {};
+    variables.forEach(v => {
+      try {
+        init[v] = localStorage.getItem(`spark-vault-var-${v}`) || '';
+      } catch {
+        init[v] = '';
+      }
+    });
+    setValues(init);
+  }, [variables]);
 
   const handleConfirm = () => {
     let result = prompt;
@@ -43,11 +63,15 @@ export function VariableDialog({ open, onOpenChange, prompt }: VariableDialogPro
     }
     navigator.clipboard.writeText(result);
     toast.success('已复制到剪贴板');
+    // 保存本次填写值到 localStorage
+    for (const [key, value] of Object.entries(values)) {
+      try {
+        localStorage.setItem(`spark-vault-var-${key}`, value);
+      } catch {
+        // 隐私模式可能不可用
+      }
+    }
     onOpenChange(false);
-    // 重置
-    const reset: Record<string, string> = {};
-    variables.forEach(v => { reset[v] = ''; });
-    setValues(reset);
   };
 
   return (

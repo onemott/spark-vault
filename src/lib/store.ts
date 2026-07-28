@@ -51,6 +51,13 @@ export function applyTheme(theme: ThemeMode): void {
 applyTheme._systemMql = null as MediaQueryList | null;
 applyTheme._systemHandler = null as ((e: MediaQueryListEvent) => void) | null;
 
+interface EditorInitialValues {
+  title: string;
+  prompt: string;
+  tags: string[];
+  projectId: number | null;
+}
+
 interface AppState {
   // 选中状态
   selectedCategoryId: number | null;
@@ -66,6 +73,12 @@ interface AppState {
   isEditorOpen: boolean;
   editingIdeaId: number | null; // null 表示新建
 
+  // 回收站 UI
+  isTrashOpen: boolean;
+
+  // 编辑器初始值快照（用于 isDirty 计算）
+  initialEditorValues: EditorInitialValues | null;
+
   // 主题
   theme: ThemeMode;
 
@@ -78,13 +91,32 @@ interface AppState {
   toggleTag: (tag: string) => void;
   openEditor: (ideaId?: number) => void;
   closeEditor: () => void;
+  setInitialEditorValues: (values: EditorInitialValues) => void;
+  markClean: () => void;
   setTheme: (theme: ThemeMode) => void;
+
+  // 回收站 UI actions
+  openTrash: () => void;
+  closeTrash: () => void;
 
   // 分类/项目 CRUD
   updateCategory: (id: number, data: { name?: string; icon?: string }) => Promise<void>;
   deleteCategory: (id: number) => Promise<void>;
   updateProject: (id: number, data: { name?: string; description?: string }) => Promise<void>;
   deleteProject: (id: number) => Promise<void>;
+
+  // 恢复
+  restoreCategory: (id: number) => Promise<void>;
+  restoreProject: (id: number) => Promise<void>;
+  restoreIdea: (id: number) => Promise<void>;
+
+  // 永久删除
+  permanentDeleteCategory: (id: number) => Promise<void>;
+  permanentDeleteProject: (id: number) => Promise<void>;
+  permanentDeleteIdea: (id: number) => Promise<void>;
+
+  // 清空回收站
+  emptyTrash: () => Promise<void>;
 }
 
 export const useStore = create<AppState>((set) => ({
@@ -101,6 +133,12 @@ export const useStore = create<AppState>((set) => ({
   // UI 状态
   isEditorOpen: false,
   editingIdeaId: null,
+
+  // 回收站 UI
+  isTrashOpen: false,
+
+  // 编辑器初始值快照
+  initialEditorValues: null,
 
   // 主题：从 localStorage 初始化
   theme: readStoredTheme(),
@@ -131,7 +169,22 @@ export const useStore = create<AppState>((set) => ({
     set({
       isEditorOpen: false,
       editingIdeaId: null,
+      initialEditorValues: null,
     }),
+
+  setInitialEditorValues: (values) =>
+    set({ initialEditorValues: values }),
+
+  markClean: () =>
+    set((state) => ({
+      initialEditorValues: state.initialEditorValues
+        ? { ...state.initialEditorValues }
+        : null,
+    })),
+
+  // 回收站 UI actions
+  openTrash: () => set({ isTrashOpen: true }),
+  closeTrash: () => set({ isTrashOpen: false }),
 
   setTheme: (theme) => {
     try {
@@ -149,15 +202,14 @@ export const useStore = create<AppState>((set) => ({
   },
 
   deleteCategory: async (id) => {
-    // 级联删除：分类 -> 项目 -> 灵感
+    const now = new Date();
     const projects = await db.projects.where('categoryId').equals(id).toArray();
     const projectIds = projects.map((p) => p.id!);
     if (projectIds.length > 0) {
-      await db.ideas.where('projectId').anyOf(projectIds).delete();
+      await db.ideas.where('projectId').anyOf(projectIds).modify((i) => { i.deletedAt = now; });
     }
-    await db.projects.where('categoryId').equals(id).delete();
-    await db.categories.delete(id);
-    // 清除选中状态
+    await db.projects.where('categoryId').equals(id).modify((p) => { p.deletedAt = now; });
+    await db.categories.update(id, { deletedAt: now });
     set((state) => ({
       selectedCategoryId: state.selectedCategoryId === id ? null : state.selectedCategoryId,
       selectedProjectId: state.selectedProjectId && projectIds.includes(state.selectedProjectId) ? null : state.selectedProjectId,
@@ -169,13 +221,78 @@ export const useStore = create<AppState>((set) => ({
   },
 
   deleteProject: async (id) => {
-    // 级联删除：项目 -> 灵感
-    await db.ideas.where('projectId').equals(id).delete();
-    await db.projects.delete(id);
-    // 清除选中状态
+    const now = new Date();
+    await db.ideas.where('projectId').equals(id).modify((i) => { i.deletedAt = now; });
+    await db.projects.update(id, { deletedAt: now });
     set((state) => ({
       selectedProjectId: state.selectedProjectId === id ? null : state.selectedProjectId,
     }));
+  },
+
+  // 恢复
+  restoreCategory: async (id) => {
+    const now = undefined;
+    const projects = await db.projects.where('categoryId').equals(id).toArray();
+    const projectIds = projects.map((p) => p.id!);
+    if (projectIds.length > 0) {
+      await db.ideas.where('projectId').anyOf(projectIds).modify((i) => { i.deletedAt = now; });
+    }
+    await db.projects.where('categoryId').equals(id).modify((p) => { p.deletedAt = now; });
+    await db.categories.update(id, { deletedAt: now });
+  },
+
+  restoreProject: async (id) => {
+    await db.ideas.where('projectId').equals(id).modify((i) => { i.deletedAt = undefined; });
+    await db.projects.update(id, { deletedAt: undefined });
+  },
+
+  restoreIdea: async (id) => {
+    await db.ideas.update(id, { deletedAt: undefined });
+  },
+
+  // 永久删除
+  permanentDeleteCategory: async (id) => {
+    const projects = await db.projects.where('categoryId').equals(id).toArray();
+    const projectIds = projects.map((p) => p.id!);
+    if (projectIds.length > 0) {
+      await db.ideas.where('projectId').anyOf(projectIds).delete();
+    }
+    await db.projects.where('categoryId').equals(id).delete();
+    await db.categories.delete(id);
+  },
+
+  permanentDeleteProject: async (id) => {
+    await db.ideas.where('projectId').equals(id).delete();
+    await db.projects.delete(id);
+  },
+
+  permanentDeleteIdea: async (id) => {
+    await db.ideas.delete(id);
+  },
+
+  // 清空回收站
+  emptyTrash: async () => {
+    const allCats = await db.categories.toArray();
+    const deletedCategories = allCats.filter(c => c.deletedAt);
+    for (const cat of deletedCategories) {
+      const projects = await db.projects.where('categoryId').equals(cat.id!).toArray();
+      const projectIds = projects.map((p) => p.id!);
+      if (projectIds.length > 0) {
+        await db.ideas.where('projectId').anyOf(projectIds).delete();
+      }
+      await db.projects.where('categoryId').equals(cat.id!).delete();
+    }
+    await db.categories.bulkDelete(deletedCategories.map(c => c.id!));
+    // 清理剩余已删项目和灵感
+    const allProjs = await db.projects.toArray();
+    const deletedProjects = allProjs.filter(p => p.deletedAt);
+    for (const proj of deletedProjects) {
+      await db.ideas.where('projectId').equals(proj.id!).delete();
+    }
+    await db.projects.bulkDelete(deletedProjects.map(p => p.id!));
+    const allIdeas = await db.ideas.toArray();
+    const deletedIdeas = allIdeas.filter(i => i.deletedAt);
+    await db.ideas.bulkDelete(deletedIdeas.map(i => i.id!));
   },
 }));
 

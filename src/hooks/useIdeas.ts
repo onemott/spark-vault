@@ -16,6 +16,9 @@ export function useFilteredIdeas(projectId: number | null, searchQuery: string, 
     if (!projectId) return [];
     let ideas = await db.ideas.where('projectId').equals(projectId).reverse().sortBy('createdAt');
 
+    // 过滤已软删除
+    ideas = ideas.filter(idea => !idea.deletedAt);
+
     // 标签过滤
     if (activeTags.length > 0) {
       ideas = ideas.filter(idea => activeTags.some(tag => idea.tags.includes(tag)));
@@ -31,6 +34,13 @@ export function useFilteredIdeas(projectId: number | null, searchQuery: string, 
       );
     }
 
+    // 收藏置顶
+    ideas.sort((a, b) => {
+      if (a.isFavorite && !b.isFavorite) return -1;
+      if (!a.isFavorite && b.isFavorite) return 1;
+      return 0;
+    });
+
     return ideas;
   }, [projectId, searchQuery, activeTags]) ?? [];
 }
@@ -39,7 +49,10 @@ export function useFilteredIdeas(projectId: number | null, searchQuery: string, 
  * 获取所有分类（按 sortOrder 排序）
  */
 export function useCategories() {
-  return useLiveQuery(() => db.categories.orderBy('sortOrder').toArray(), []) ?? [];
+  return useLiveQuery(async () => {
+    const cats = await db.categories.orderBy('sortOrder').toArray();
+    return cats.filter(cat => !cat.deletedAt);
+  }, []) ?? [];
 }
 
 /**
@@ -48,7 +61,8 @@ export function useCategories() {
 export function useProjects(categoryId: number | null) {
   return useLiveQuery(async () => {
     if (!categoryId) return [];
-    return db.projects.where('categoryId').equals(categoryId).toArray();
+    const projs = await db.projects.where('categoryId').equals(categoryId).toArray();
+    return projs.filter(proj => !proj.deletedAt);
   }, [categoryId]) ?? [];
 }
 
@@ -58,7 +72,9 @@ export function useProjects(categoryId: number | null) {
 export function useIdea(ideaId: number | null) {
   return useLiveQuery(async () => {
     if (!ideaId) return undefined;
-    return db.ideas.get(ideaId);
+    const idea = await db.ideas.get(ideaId);
+    if (idea?.deletedAt) return undefined;
+    return idea;
   }, [ideaId]);
 }
 
@@ -66,7 +82,10 @@ export function useIdea(ideaId: number | null) {
  * 获取所有项目（用于编辑器中选择）
  */
 export function useAllProjects() {
-  return useLiveQuery(() => db.projects.toArray(), []) ?? [];
+  return useLiveQuery(async () => {
+    const projs = await db.projects.toArray();
+    return projs.filter(proj => !proj.deletedAt);
+  }, []) ?? [];
 }
 
 /**
@@ -84,7 +103,7 @@ export function useGlobalSearchIdeas(searchQuery: string, activeTags: string[]) 
     const projectMap = new Map(allProjects.map((p) => [p.id!, p]));
     const categoryMap = new Map(allCategories.map((c) => [c.id!, c]));
 
-    let results = allIdeas;
+    let results = allIdeas.filter(idea => !idea.deletedAt);
 
     // 标签过滤
     if (activeTags.length > 0) {
@@ -103,7 +122,7 @@ export function useGlobalSearchIdeas(searchQuery: string, activeTags: string[]) 
     }
 
     // 附加来源信息
-    return results
+    const enriched = results
       .map((idea) => {
         const project = projectMap.get(idea.projectId);
         const category = project ? categoryMap.get(project.categoryId) : undefined;
@@ -114,5 +133,44 @@ export function useGlobalSearchIdeas(searchQuery: string, activeTags: string[]) 
         };
       })
       .filter((r) => r.projectName !== '未知项目'); // 过滤孤立数据
+
+    // 收藏置顶
+    enriched.sort((a, b) => {
+      if (a.isFavorite && !b.isFavorite) return -1;
+      if (!a.isFavorite && b.isFavorite) return 1;
+      return 0;
+    });
+
+    return enriched;
   }, [searchQuery, activeTags]) ?? [];
+}
+
+/**
+ * 查询已软删除的分类
+ */
+export function useTrashedCategories() {
+  return useLiveQuery(async () => {
+    const cats = await db.categories.toArray();
+    return cats.filter(cat => !!cat.deletedAt);
+  }, []) ?? [];
+}
+
+/**
+ * 查询已软删除的项目
+ */
+export function useTrashedProjects() {
+  return useLiveQuery(async () => {
+    const projs = await db.projects.toArray();
+    return projs.filter(proj => !!proj.deletedAt);
+  }, []) ?? [];
+}
+
+/**
+ * 查询已软删除的灵感
+ */
+export function useTrashedIdeas() {
+  return useLiveQuery(async () => {
+    const ideas = await db.ideas.toArray();
+    return ideas.filter(idea => !!idea.deletedAt);
+  }, []) ?? [];
 }

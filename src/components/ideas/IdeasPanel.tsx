@@ -1,6 +1,7 @@
 import { useMemo, useRef, useEffect, forwardRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Plus, Search, Sparkles, Globe } from 'lucide-react';
+import { Plus, Search, Sparkles, Globe, Star } from 'lucide-react';
+import { db } from '@/lib/db';
 import { useStore } from '@/lib/store';
 import { useFilteredIdeas, useGlobalSearchIdeas, useAllProjects, type EnrichedIdea } from '@/hooks/useIdeas';
 import { Input } from '@/components/ui/input';
@@ -96,6 +97,11 @@ export const IdeasPanel = forwardRef<HTMLDivElement, IdeasPanelProps>(
       openEditor();
     };
 
+    const toggleFavorite = async (e: React.MouseEvent, ideaId: number, current: boolean) => {
+      e.stopPropagation();
+      await db.ideas.update(ideaId, { isFavorite: !current });
+    };
+
     return (
       <div ref={ref} className="flex-1 flex flex-col min-w-0 border-l border-border">
         {/* 顶部搜索栏 */}
@@ -176,7 +182,17 @@ export const IdeasPanel = forwardRef<HTMLDivElement, IdeasPanelProps>(
                       <h3 className="text-sm font-medium leading-tight line-clamp-1">
                         {idea.title}
                       </h3>
-                      <div className="opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+                      <div className={`flex items-center gap-1 shrink-0 ${idea.isFavorite ? '' : 'opacity-0 group-hover:opacity-100'} transition-opacity`}>
+                        <button
+                          className={`p-1 rounded hover:bg-accent transition-colors ${idea.isFavorite ? 'opacity-100' : ''}`}
+                          onClick={(e) => toggleFavorite(e, idea.id!, !!idea.isFavorite)}
+                          title={idea.isFavorite ? '取消收藏' : '收藏'}
+                        >
+                          <Star
+                            className={`size-3.5 ${idea.isFavorite ? 'fill-yellow-400 text-yellow-400' : 'text-muted-foreground'}`}
+                            strokeWidth={1.5}
+                          />
+                        </button>
                         <CopyButton prompt={idea.prompt} />
                       </div>
                     </div>

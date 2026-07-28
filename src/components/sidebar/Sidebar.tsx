@@ -1,4 +1,5 @@
 import { useState, useRef } from 'react';
+import { useLiveQuery } from 'dexie-react-hooks';
 import { AnimatePresence, motion } from 'motion/react';
 import {
   ChevronRight,
@@ -34,11 +35,12 @@ import {
   TreePine,
   Pencil,
   Trash2,
+  RotateCcw,
 } from 'lucide-react';
 import { db } from '@/lib/db';
 import { useStore } from '@/lib/store';
 import { useCategories, useProjects } from '@/hooks/useIdeas';
-import { exportAllData, importAllData } from '@/lib/importExport';
+import { exportAllData, importAllData, getSnapshots, rollbackFromSnapshot } from '@/lib/importExport';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import {
@@ -49,6 +51,12 @@ import {
   DialogFooter,
   DialogDescription,
 } from '@/components/ui/dialog';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
 import { toast } from 'sonner';
@@ -96,8 +104,16 @@ export function Sidebar() {
   const deleteCategory = useStore((s) => s.deleteCategory);
   const updateProject = useStore((s) => s.updateProject);
   const deleteProject = useStore((s) => s.deleteProject);
+  const openTrash = useStore((s) => s.openTrash);
   const theme = useStore((s) => s.theme);
   const setTheme = useStore((s) => s.setTheme);
+
+  // 快照列表（用于回滚）
+  const snapshots = useLiveQuery(() => getSnapshots(), []) ?? [];
+
+  const handleRollback = async (snapshotId: number) => {
+    await rollbackFromSnapshot(snapshotId);
+  };
 
   const [expandedCategories, setExpandedCategories] = useState<Set<number>>(new Set());
   const [showNewCategoryDialog, setShowNewCategoryDialog] = useState(false);
@@ -332,6 +348,37 @@ export function Sidebar() {
         <Button
           variant="ghost"
           size="icon-sm"
+          onClick={openTrash}
+          title="回收站"
+        >
+          <Trash2 strokeWidth={1.5} />
+        </Button>
+        {snapshots.length > 0 && (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                title="从快照回滚"
+              >
+                <RotateCcw strokeWidth={1.5} />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              {snapshots.map((snap) => (
+                <DropdownMenuItem
+                  key={snap.id}
+                  onClick={() => handleRollback(snap.id!)}
+                >
+                  {new Date(snap.createdAt).toLocaleString()}
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        )}
+        <Button
+          variant="ghost"
+          size="icon-sm"
           onClick={cycleTheme}
           title={`主题: ${theme}`}
         >
@@ -445,7 +492,7 @@ export function Sidebar() {
               {deletingCategory && deletingCategory.projectCount === 0 && (
                 <>该分类下暂无项目。</>
               )}
-              此操作不可撤销。
+              该分类及下属项目和灵感将被移入回收站，可在回收站中恢复。
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
@@ -500,7 +547,7 @@ export function Sidebar() {
               {deletingProject && deletingProject.ideaCount === 0 && (
                 <>该项目下暂无灵感。</>
               )}
-              此操作不可撤销。
+              该项目及下属灵感将被移入回收站，可在回收站中恢复。
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>

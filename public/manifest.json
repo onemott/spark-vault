@@ -1,0 +1,16 @@
+{
+  "name": "Spark Vault",
+  "short_name": "SparkVault",
+  "description": "本地优先的灵感收集与提示词管理工具",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#16a34a",
+  "icons": [
+    {
+      "src": "/vite.svg",
+      "sizes": "any",
+      "type": "image/svg+xml"
+    }
+  ]
+}

@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { toast } from 'sonner';
 import { X, Save, Trash2 } from 'lucide-react';
@@ -34,6 +34,9 @@ export function EditorPanel() {
   const editingIdeaId = useStore((s) => s.editingIdeaId);
   const closeEditor = useStore((s) => s.closeEditor);
   const selectedProjectId = useStore((s) => s.selectedProjectId);
+  const initialEditorValues = useStore((s) => s.initialEditorValues);
+  const setInitialEditorValues = useStore((s) => s.setInitialEditorValues);
+  const markClean = useStore((s) => s.markClean);
 
   const idea = useIdea(editingIdeaId);
   const projects = useAllProjects();
@@ -44,24 +47,55 @@ export function EditorPanel() {
   const [tagInput, setTagInput] = useState('');
   const [projectId, setProjectId] = useState<number | null>(null);
   const [deleteConfirmId, setDeleteConfirmId] = useState<number | null>(null);
+  const [showUnsavedDialog, setShowUnsavedDialog] = useState(false);
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const highlightRef = useRef<HTMLPreElement>(null);
 
-  // 加载编辑数据
+  // 检测是否有未保存更改（基于 store 中的初始值快照）
+  const isDirty = useMemo(() => {
+    if (!isEditorOpen || !initialEditorValues) return false;
+    return (
+      title !== initialEditorValues.title ||
+      prompt !== initialEditorValues.prompt ||
+      JSON.stringify(tags) !== JSON.stringify(initialEditorValues.tags) ||
+      projectId !== initialEditorValues.projectId
+    );
+  }, [title, prompt, tags, projectId, isEditorOpen, initialEditorValues]);
+
+  // 关闭请求处理：有未保存更改时弹确认
+  const handleCloseRequest = useCallback(() => {
+    if (isDirty) {
+      setShowUnsavedDialog(true);
+    } else {
+      closeEditor();
+    }
+  }, [isDirty, closeEditor]);
+
+  const handleDiscard = useCallback(() => {
+    setShowUnsavedDialog(false);
+    closeEditor();
+  }, [closeEditor]);
+
+  // 加载编辑数据（编辑器每次打开时重新初始化，避免残留上次输入）
   useEffect(() => {
+    if (!isEditorOpen) return;
     if (editingIdeaId && idea) {
       setTitle(idea.title);
       setPrompt(idea.prompt);
       setTags(idea.tags);
       setProjectId(idea.projectId);
+      setInitialEditorValues({ title: idea.title, prompt: idea.prompt, tags: [...idea.tags], projectId: idea.projectId });
     } else {
       setTitle('');
       setPrompt('');
       setTags([]);
       setProjectId(selectedProjectId);
+      setInitialEditorValues({ title: '', prompt: '', tags: [], projectId: selectedProjectId });
     }
-  }, [editingIdeaId, idea, selectedProjectId]);
+    setTagInput('');
+    setShowUnsavedDialog(false);
+  }, [isEditorOpen, editingIdeaId, idea, selectedProjectId, setInitialEditorValues]);
 
   // 标签输入处理
   const handleTagKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -155,6 +189,7 @@ export function EditorPanel() {
       toast.success('灵感已创建');
     }
 
+    markClean();
     closeEditor();
   };
 
@@ -166,20 +201,69 @@ export function EditorPanel() {
 
   const confirmDelete = async () => {
     if (!deleteConfirmId) return;
-    await db.ideas.delete(deleteConfirmId);
-    toast.success('灵感已删除');
+    await db.ideas.update(deleteConfirmId, { deletedAt: new Date() });
+    toast.success('灵感已移入回收站');
     setDeleteConfirmId(null);
     closeEditor();
   };
 
+  // beforeunload 拦截：有未保存更改时阻止关闭
+  useEffect(() => {
+    if (!isEditorOpen || !isDirty) return;
+    const handler = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+    };
+    window.addEventListener('beforeunload', handler);
+    return () => window.removeEventListener('beforeunload', handler);
+  }, [isEditorOpen, isDirty]);
+
+  // Ctrl+S 保存 + Esc 关闭
+  useEffect(() => {
+    if (!isEditorOpen) return;
+    const handler = (e: KeyboardEvent) => {
+      // Ctrl+S / Cmd+S 保存
+      if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+        e.preventDefault();
+        handleSave();
+        return;
+      }
+      // Esc 关闭
+      if (e.key === 'Escape') {
+        if (deleteConfirmId || showUnsavedDialog) return;
+        e.preventDefault();
+        handleCloseRequest();
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [isEditorOpen, deleteConfirmId, showUnsavedDialog, title, prompt, tags, projectId, editingIdeaId, isDirty, handleCloseRequest]);
+
   return (
     <>
+    {/* 未保存确认对话框 */}
+    <Dialog open={showUnsavedDialog} onOpenChange={(open) => { if (!open) setShowUnsavedDialog(false); }}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>未保存的更改</DialogTitle>
+          <DialogDescription>有未保存的更改，是否放弃？</DialogDescription>
+        </DialogHeader>
+        <DialogFooter>
+          <Button variant="outline" onClick={() => setShowUnsavedDialog(false)}>
+            继续编辑
+          </Button>
+          <Button variant="destructive" onClick={handleDiscard}>
+            放弃
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+
     {/* 删除确认对话框（放在 AnimatePresence 外部避免动画冲突） */}
     <Dialog open={!!deleteConfirmId} onOpenChange={(open) => { if (!open) setDeleteConfirmId(null); }}>
       <DialogContent>
         <DialogHeader>
           <DialogTitle>确认删除</DialogTitle>
-          <DialogDescription>确认删除此灵感？此操作不可撤销。</DialogDescription>
+          <DialogDescription>确认删除此灵感？它将移入回收站，可在回收站中恢复。</DialogDescription>
         </DialogHeader>
         <DialogFooter>
           <Button variant="outline" onClick={() => setDeleteConfirmId(null)}>
@@ -206,7 +290,7 @@ export function EditorPanel() {
         <h2 className="text-sm font-medium">
           {editingIdeaId ? '编辑灵感' : '新建灵感'}
         </h2>
-        <Button variant="ghost" size="icon-sm" onClick={closeEditor}>
+        <Button variant="ghost" size="icon-sm" onClick={handleCloseRequest}>
           <X strokeWidth={1.5} />
         </Button>
       </div>
@@ -283,7 +367,8 @@ export function EditorPanel() {
         <div className="flex flex-col gap-1.5">
           <label className="text-sm text-muted-foreground">所属项目</label>
           <Select
-            value={projectId?.toString() || ''}
+            items={projects.map((p) => ({ label: p.name, value: p.id!.toString() }))}
+            value={projectId?.toString() ?? null}
             onValueChange={(v) => setProjectId(Number(v))}
           >
             <SelectTrigger className="w-full">
