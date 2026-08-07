@@ -162,11 +162,11 @@ export function TrashPanel() {
                     {trashedIdeas.map((idea) => (
                       <TrashItem
                         key={idea.id}
-                        name={idea.title}
+                        name={idea.title ?? '未命名灵感'}
                         deletedAt={idea.deletedAt}
                         formatDate={formatDate}
                         onRestore={() => handleRestore('idea', idea.id!)}
-                        onPermanentDelete={() => setConfirmPermanent({ type: 'idea', id: idea.id, name: idea.title })}
+                        onPermanentDelete={() => setConfirmPermanent({ type: 'idea', id: idea.id, name: idea.title ?? '未命名灵感' })}
                       />
                     ))}
                   </TrashSection>

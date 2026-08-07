@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RC380 有刷直流电机 · 电流环硬件设计方案</title>
+<style>
+  body {
+    font-family: -apple-system, "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif;
+    color: #1f2937;
+    line-height: 1.7;
+    margin: 0;
+    padding: 0;
+    background: #f3f4f6;
+  }
+  .container {
+    max-width: 860px;
+    margin: 24px auto;
+    background: #ffffff;
+    padding: 40px 48px;
+    border-radius: 12px;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.08);
+  }
+  h1 {
+    font-size: 26px;
+    color: #111827;
+    border-bottom: 3px solid #2563eb;
+    padding-bottom: 12px;
+    margin-top: 0;
+  }
+  h2 {
+    font-size: 20px;
+    color: #1d4ed8;
+    margin-top: 32px;
+    border-left: 4px solid #2563eb;
+    padding-left: 12px;
+  }
+  h3 {
+    font-size: 17px;
+    color: #374151;
+    margin-top: 24px;
+  }
+  p { margin: 10px 0; }
+  strong { color: #111827; }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 16px 0 24px;
+    font-size: 14px;
+  }
+  thead th {
+    background: #2563eb;
+    color: #fff;
+    text-align: left;
+    padding: 10px 12px;
+    border: 1px solid #1e40af;
+  }
+  tbody td {
+    padding: 9px 12px;
+    border: 1px solid #e5e7eb;
+    vertical-align: top;
+  }
+  tbody tr:nth-child(even) { background: #f8fafc; }
+  code {
+    background: #f1f5f9;
+    border: 1px solid #e2e8f0;
+    border-radius: 4px;
+    padding: 1px 6px;
+    font-family: "SFMono-Regular", Consolas, "Courier New", monospace;
+    font-size: 13px;
+    color: #b91c1c;
+  }
+  pre {
+    background: #0f172a;
+    color: #e2e8f0;
+    padding: 14px 16px;
+    border-radius: 8px;
+    overflow-x: auto;
+    font-size: 13px;
+    line-height: 1.6;
+  }
+  pre code { background: transparent; border: none; color: inherit; }
+  blockquote {
+    border-left: 4px solid #f59e0b;
+    background: #fffbeb;
+    padding: 12px 16px;
+    margin: 16px 0;
+    border-radius: 0 8px 8px 0;
+    color: #92400e;
+  }
+  blockquote p { margin: 4px 0; }
+  ul, ol { padding-left: 24px; }
+  li { margin: 6px 0; }
+  .warning {
+    background: #fef2f2;
+    border-left: 4px solid #dc2626;
+    padding: 12px 16px;
+    border-radius: 0 8px 8px 0;
+    margin: 16px 0;
+  }
+  .tip {
+    background: #eff6ff;
+    border-left: 4px solid #2563eb;
+    padding: 12px 16px;
+    border-radius: 0 8px 8px 0;
+    margin: 16px 0;
+  }
+  .footer {
+    text-align: center;
+    color: #9ca3af;
+    font-size: 12px;
+    margin-top: 32px;
+    padding-top: 16px;
+    border-top: 1px solid #e5e7eb;
+  }
+</style>
+</head>
+<body>
+<div class="container">
+
+<h1>RC380 有刷直流电机 · 电流环硬件设计方案</h1>
+
+<p>这是智能车竞赛（如全国大学生智能汽车竞赛）中非常经典的 <strong>380 有刷直流电机</strong>。基于图中确认的精确参数，重新校准电流环硬件设计方案。</p>
+
+<h2>核心参数确认与设计约束</h2>
+<table>
+<thead>
+<tr><th>参数</th><th>数值</th><th>对电流采样的影响</th></tr>
+</thead>
+<tbody>
+<tr><td><strong>额定电压</strong></td><td>DC 9V</td><td>低压系统，无需隔离，非隔离采样最优</td></tr>
+<tr><td><strong>空载电流</strong></td><td>&lt; 430 mA</td><td><strong>极低！</strong> 决定了低速/轻载时的分辨率要求</td></tr>
+<tr><td><strong>堵转电流</strong></td><td>&lt; 14.4 A</td><td><strong>极高！</strong> 动态范围达 33:1 (14.4A / 0.43A)</td></tr>
+<tr><td><strong>空载转速</strong></td><td>18500 rpm</td><td>高频换向噪声源，需强 EMI 抑制</td></tr>
+</tbody>
+</table>
+
+<div class="warning">
+<p><strong>⚠️ 最大挑战：巨大的动态范围</strong></p>
+<p>需要在同一个传感器上同时准确测量 <strong>0.43A（空载微调）</strong> 和 <strong>14.4A（堵转保护/起步爆发）</strong>。</p>
+<ul>
+<li>若按 14.4A 满量程设计，0.43A 仅占 3%，若 ADC 为 12-bit，此时仅有 ~120 个码值，噪声稍大就会抖动。</li>
+<li>若按 0.43A 优化，14.4A 会直接饱和削顶，失去过流保护能力。</li>
+</ul>
+</div>
+
+<h2>针对 RC380 的最优硬件方案</h2>
+
+<h3>1. 采样电阻选型（关键调整）</h3>
+<p>为了兼顾 14.4A 不饱和且 0.43A 可分辨，建议略微降低采样压降，换取更好的线性度和更低的发热。</p>
+<ul>
+<li><strong>阻值推荐</strong>：<strong>5 mΩ</strong>（而非之前的 7mΩ）
+  <ul>
+    <li>@14.4A 压降 = 14.4 × 0.005 = <strong>72 mV</strong></li>
+    <li>@0.43A 压降 = 0.43 × 0.005 = <strong>2.15 mV</strong></li>
+  </ul>
+</li>
+<li><strong>功率额定</strong>：P = I²R = 14.4² × 0.005 ≈ <strong>1.04 W</strong> → 选 <strong>2W 或 3W</strong> 合金电阻。</li>
+<li><strong>型号推荐</strong>：<strong>Vishay WSLP2512L5000FEA</strong> (5mΩ, 2W, TCR ±75ppm/°C) 或 <strong>Bourns CSS2H-2512R-L500F</strong>。
+  <ul>
+    <li><em>注意：必须用四端开尔文封装电阻，普通两端电阻在大电流下焊点接触电阻误差巨大。</em></li>
+  </ul>
+</li>
+</ul>
+
+<h3>2. 电流检测运放与增益匹配</h3>
+<p>由于最大输入仅 72mV，需要足够的增益将其放大到 MCU ADC 的有效区间（假设 3.3V 参考）。</p>
+<ul>
+<li><strong>目标输出</strong>：@14.4A 时输出接近 3.0V（留余量防饱和）。</li>
+<li><strong>所需增益</strong>：G = 3.0V / 0.072V ≈ <strong>41.6</strong>。</li>
+<li><strong>芯片选型</strong>：<strong>TI INA180A2</strong> (固定增益 50 V/V) 或 <strong>INA181A2</strong> (50 V/V, 更高精度)。
+  <ul>
+    <li>@14.4A 输出：72mV × 50 = 3.6V → <strong>超出 3.3V 量程！</strong></li>
+    <li><strong>修正方案 A（推荐）</strong>：改用 <strong>INA180A1（增益 20 V/V）</strong>。
+      <ul>
+        <li>@14.4A 输出：72mV × 20 = 1.44V（安全，但分辨率减半）</li>
+        <li>@0.43A 输出：2.15mV × 20 = 43mV（12-bit ADC 下约 53 码，勉强可用）</li>
+      </ul>
+    </li>
+    <li><strong>修正方案 B（高性能）</strong>：使用 <strong>可编程增益放大器 (PGA)</strong> 或 <strong>双量程切换</strong>。但在智能车比赛中，通常追求简单可靠。<strong>建议采用方案 A + 软件过采样</strong>。</li>
+    <li><strong>修正方案 C（折中最佳）</strong>：选用 <strong>INA240A2（增益 50 V/V）</strong> 但供电改为 <strong>5V</strong>（若 MCU 支持 5V 容忍 ADC），或接受 3.3V 下的轻微饱和并做软件限幅。</li>
+    <li><strong>最终推荐</strong>：<strong>INA180A1 (20V/V)</strong> + <strong>3.3V 供电</strong>。虽然牺牲了部分高速动态下的满量程利用率，但保证了绝对不饱和，且 1.44V 对于 12-bit ADC 已有足够信噪比。若需更高精度，MCU 端开启 <strong>16x 硬件过采样</strong>，可将有效分辨率提升至 14-15 bit，完美解决 0.43A 的分辨问题。</li>
+  </ul>
+</li>
+</ul>
+
+<h3>3. 滤波与抗扰（RC380 专属）</h3>
+<p>RC380 转速高达 18500rpm，电刷换向频率极高，是强烈的宽带噪声源。</p>
+<ul>
+<li><strong>RC 滤波</strong>：INA180 输出端串联 <strong>47Ω + 2.2nF C0G</strong>。
+  <ul>
+    <li>截止频率 f<sub>c</sub> = 1/(2πRC) ≈ <strong>1.5 MHz</strong>。</li>
+    <li>既能滤除 MHz 级换向火花噪声，又不影响 kHz 级电流环带宽。</li>
+  </ul>
+</li>
+<li><strong>电机端吸收</strong>：<strong>必须在电机两个引脚间并联一个 100nF C0G 电容</strong>，并在每个引脚对地各接一个 100nF 电容（Y 电容布局）。这是抑制 RC380 噪声最有效的手段，比后端滤波更重要。</li>
+</ul>
+
+<h2>PCB 布局与智能车实战建议</h2>
+<ol>
+<li><strong>驱动芯片选择</strong>：
+  <ul>
+    <li>RC380 堵转 14.4A，持续工作电流可能在 3-5A。</li>
+    <li>推荐 <strong>DRV8701</strong>（外置 MOS）或 <strong>TB67H450</strong>（内置 MOS, 3.5A 持续/峰值更高）。</li>
+    <li>若用分立 MOS，选 <strong>IRLR7843</strong> 或 <strong>AON6244</strong>（低 Rds(on)，小封装）。</li>
+  </ul>
+</li>
+<li><strong>采样位置</strong>：
+  <ul>
+    <li><strong>严格低侧采样</strong>：放在 H 桥下管 Source 到 GND 之间。</li>
+    <li><strong>星型接地</strong>：采样电阻的 GND 端、驱动芯片 GND、MCU GND 必须在一点汇合，避免大电流在地平面上产生压降干扰 ADC。</li>
+  </ul>
+</li>
+<li><strong>软件策略（弥补硬件动态范围不足）</strong>：
+  <ul>
+    <li><strong>过采样</strong>：STM32 的 ADC 支持硬件过采样。设置 16x 或 64x 过采样，将 12-bit 提升至 14-16 bit 有效分辨率。这样 43mA (0.043A) 的变化也能被清晰捕捉。</li>
+    <li><strong>分段 PID</strong>：低速区（&lt;1A）使用高增益 P 项；高速/重载区（&gt;5A）降低增益防超调。</li>
+    <li><strong>堵转保护</strong>：软件设定阈值，若电流 &gt; 12A 持续 &gt; 50ms，立即切断 PWM，防止烧毁电机或驱动。</li>
+  </ul>
+</li>
+</ol>
+
+<h2>最终 BOM 清单（单电机通道）</h2>
+<table>
+<thead>
+<tr><th>器件</th><th>型号/规格</th><th>数量</th><th>作用</th></tr>
+</thead>
+<tbody>
+<tr><td><strong>采样电阻</strong></td><td>5mΩ, 2W, 2512 合金 (Vishay WSLP)</td><td>1</td><td>电流→电压转换</td></tr>
+<tr><td><strong>检测运放</strong></td><td>INA180A1IDBVR (20V/V)</td><td>1</td><td>信号放大</td></tr>
+<tr><td><strong>滤波电容</strong></td><td>2.2nF C0G 0402</td><td>1</td><td>高频噪声抑制</td></tr>
+<tr><td><strong>滤波电阻</strong></td><td>47Ω 0402</td><td>1</td><td>与电容构成 LPF</td></tr>
+<tr><td><strong>去耦电容</strong></td><td>100nF C0G + 10µF X7R</td><td>各1</td><td>运放电源稳定</td></tr>
+<tr><td><strong>电机吸收电容</strong></td><td>100nF C0G（跨接电机引脚）</td><td>1</td><td><strong>源头抑制 EMI</strong></td></tr>
+</tbody>
+</table>
+
+<div class="tip">
+<p><strong>💡 总结</strong>：这套方案成本控制在 ¥3 以内，专为 RC380 的"低压、大动态范围、强噪声"特性优化。配合 STM32 的硬件过采样功能，完全可以实现媲美工业伺服的电流环性能，满足智能车比赛中精准的速度控制和力矩限制需求。</p>
+</div>
+
+<div class="footer">RC380 有刷直流电机 · 电流环硬件设计方案</div>
+</div>
+</body>
+</html>

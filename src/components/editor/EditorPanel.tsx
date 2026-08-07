@@ -1,10 +1,11 @@
-import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { toast } from 'sonner';
 import { X, Save, Trash2 } from 'lucide-react';
 import { db } from '@/lib/db';
 import { useStore } from '@/lib/store';
-import { useIdea, useAllProjects } from '@/hooks/useIdeas';
+import { useIdea, useAllProjects, UNASSIGNED_PROJECT_ID } from '@/hooks/useIdeas';
+import { extractTagsFromPrompt } from '@/lib/utils';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -29,13 +30,32 @@ import {
  * - 新建模式：空表单
  * - 编辑模式：加载 idea 数据
  */
+
+/** 编辑器的内容上下文：标识表单当前承载的是「编辑某条灵感」还是「新建」 */
+type EditorContext = {
+  kind: 'idea' | 'new';
+  ideaId: number | null;
+  projectId: number | null;
+  categoryId: number | null;
+};
+
+/** 根据 projectId 反查其所属分类 id（用于识别「新建」上下文是否因切项目而变化） */
+function getCategoryId(projectId: number | null, projects: { id?: number; categoryId: number }[]): number | null {
+  if (projectId == null) return null;
+  const proj = projects.find((p) => p.id === projectId);
+  return proj?.categoryId ?? null;
+}
+
 export function EditorPanel() {
   const isEditorOpen = useStore((s) => s.isEditorOpen);
   const editingIdeaId = useStore((s) => s.editingIdeaId);
   const closeEditor = useStore((s) => s.closeEditor);
+  const setEditingIdeaId = useStore((s) => s.setEditingIdeaId);
   const selectedProjectId = useStore((s) => s.selectedProjectId);
-  const initialEditorValues = useStore((s) => s.initialEditorValues);
-  const setInitialEditorValues = useStore((s) => s.setInitialEditorValues);
+  const setSelectedProjectId = useStore((s) => s.setSelectedProjectId);
+  const selectedCategoryId = useStore((s) => s.selectedCategoryId);
+  const setSelectedCategoryId = useStore((s) => s.setSelectedCategoryId);
+  const setSelectedIdeaId = useStore((s) => s.setSelectedIdeaId);
   const markClean = useStore((s) => s.markClean);
 
   const idea = useIdea(editingIdeaId);
@@ -49,60 +69,130 @@ export function EditorPanel() {
   const [deleteConfirmId, setDeleteConfirmId] = useState<number | null>(null);
   const [showUnsavedDialog, setShowUnsavedDialog] = useState(false);
 
+  // 当前编辑器承载的内容上下文（用于区分「新建」与「编辑」，避免切项目/切灵感时误判）
+  const [context, setContext] = useState<EditorContext>({ kind: 'new', ideaId: null, projectId: null, categoryId: null });
+
+  // 上一次「成功加载/保存」后的表单值快照，用于在切换上下文前判断是否有未保存修改
+  const lastCleanSnapshot = useRef({ title: '', prompt: '', tags: [] as string[], projectId: null as number | null });
+
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const highlightRef = useRef<HTMLPreElement>(null);
 
-  // 检测是否有未保存更改（基于 store 中的初始值快照）
-  const isDirty = useMemo(() => {
-    if (!isEditorOpen || !initialEditorValues) return false;
+  // 检测当前表单相对「上次成功加载/保存」是否有未保存更改
+  const hasUnsavedChanges = useCallback((): boolean => {
+    const s = lastCleanSnapshot.current;
     return (
-      title !== initialEditorValues.title ||
-      prompt !== initialEditorValues.prompt ||
-      JSON.stringify(tags) !== JSON.stringify(initialEditorValues.tags) ||
-      projectId !== initialEditorValues.projectId
+      title !== s.title ||
+      prompt !== s.prompt ||
+      JSON.stringify(tags) !== JSON.stringify(s.tags) ||
+      projectId !== s.projectId
     );
-  }, [title, prompt, tags, projectId, isEditorOpen, initialEditorValues]);
+  }, [title, prompt, tags, projectId]);
 
   // 关闭请求处理：有未保存更改时弹确认
   const handleCloseRequest = useCallback(() => {
-    if (isDirty) {
+    if (hasUnsavedChanges()) {
       setShowUnsavedDialog(true);
     } else {
       closeEditor();
     }
-  }, [isDirty, closeEditor]);
+  }, [hasUnsavedChanges, closeEditor]);
 
-  const handleDiscard = useCallback(() => {
-    setShowUnsavedDialog(false);
-    closeEditor();
-  }, [closeEditor]);
-
-  // 加载编辑数据（编辑器每次打开时重新初始化，避免残留上次输入）
-  useEffect(() => {
-    if (!isEditorOpen) return;
-    if (editingIdeaId && idea) {
-      setTitle(idea.title);
-      setPrompt(idea.prompt);
-      setTags(idea.tags);
-      setProjectId(idea.projectId);
-      setInitialEditorValues({ title: idea.title, prompt: idea.prompt, tags: [...idea.tags], projectId: idea.projectId });
-    } else {
-      setTitle('');
-      setPrompt('');
-      setTags([]);
-      setProjectId(selectedProjectId);
-      setInitialEditorValues({ title: '', prompt: '', tags: [], projectId: selectedProjectId });
-    }
+  // 将表单内容加载为指定上下文（新建或编辑某条灵感），并记录干净快照
+  const loadIntoEditor = useCallback((
+    ctx: EditorContext,
+    values: { title: string; prompt: string; tags: string[]; projectId: number }
+  ) => {
+    setContext(ctx);
+    setTitle(values.title);
+    setPrompt(values.prompt);
+    setTags([...values.tags]);
+    setProjectId(values.projectId);
+    lastCleanSnapshot.current = { ...values, tags: [...values.tags] };
     setTagInput('');
     setShowUnsavedDialog(false);
-  }, [isEditorOpen, editingIdeaId, idea, selectedProjectId, setInitialEditorValues]);
+  }, []);
+
+  // 暂存被拦截的「目标上下文」，待用户选择放弃后应用
+  const pendingLoadRef = useRef<{ ctx: EditorContext; values: { title: string; prompt: string; tags: string[]; projectId: number } } | null>(null);
+
+  // 用户选择「放弃」：若有待切换目标则加载它，否则直接关闭编辑器
+  const handleDiscard = useCallback(() => {
+    setShowUnsavedDialog(false);
+    if (pendingLoadRef.current) {
+      const { ctx, values } = pendingLoadRef.current;
+      pendingLoadRef.current = null;
+      loadIntoEditor(ctx, values);
+      return;
+    }
+    closeEditor();
+  }, [closeEditor, loadIntoEditor]);
+
+  // 用户选择「继续编辑」：撤销已发生的导航，回到当前编辑器的上下文
+  const handleKeepEditing = useCallback(() => {
+    pendingLoadRef.current = null;
+    setShowUnsavedDialog(false);
+    if (context.kind === 'idea') {
+      setEditingIdeaId(context.ideaId);
+      setSelectedIdeaId(context.ideaId);
+    } else {
+      setEditingIdeaId(null);
+      setSelectedIdeaId(null);
+    }
+    setSelectedProjectId(context.projectId);
+    setSelectedCategoryId(context.categoryId);
+  }, [context, setEditingIdeaId, setSelectedIdeaId, setSelectedProjectId, setSelectedCategoryId]);
+
+  // 加载编辑数据（编辑器每次打开时重新初始化，避免残留上次输入）
+  // 关键：仅当「内容上下文」真正发生变化时才重置；若只是切换项目/灵感/新建，
+  // 且当前有未保存修改，则先走确认流程，避免静默丢失。
+  useEffect(() => {
+    if (!isEditorOpen) return;
+
+    // 计算目标上下文
+    let targetCtx: EditorContext;
+    let values: { title: string; prompt: string; tags: string[]; projectId: number };
+
+    if (editingIdeaId && idea) {
+      targetCtx = { kind: 'idea', ideaId: editingIdeaId, projectId: idea.projectId ?? null, categoryId: getCategoryId(idea.projectId ?? null, projects) };
+      values = {
+        title: idea.title ?? '',
+        prompt: idea.prompt,
+        tags: [...idea.tags],
+        projectId: idea.projectId ?? UNASSIGNED_PROJECT_ID,
+      };
+    } else if (editingIdeaId) {
+      // 正在编辑但 idea 尚未加载完成（live query 异步）：本次不重置，等加载完成
+      return;
+    } else {
+      targetCtx = { kind: 'new', ideaId: null, projectId: selectedProjectId, categoryId: selectedCategoryId };
+      values = { title: '', prompt: '', tags: [], projectId: selectedProjectId ?? UNASSIGNED_PROJECT_ID };
+    }
+
+    // 上下文无变化（例如仅滚动/重渲染）则跳过
+    if (context.kind === targetCtx.kind && context.ideaId === targetCtx.ideaId && context.projectId === targetCtx.projectId && context.categoryId === targetCtx.categoryId) {
+      return;
+    }
+
+    // 有未保存修改且上下文要切换：暂存目标，走确认对话框
+    if (hasUnsavedChanges()) {
+      pendingLoadRef.current = { ctx: targetCtx, values };
+      setShowUnsavedDialog(true);
+      return;
+    }
+
+    loadIntoEditor(targetCtx, values);
+  }, [isEditorOpen, editingIdeaId, idea, selectedProjectId, selectedCategoryId, projects, context, loadIntoEditor, hasUnsavedChanges]);
 
   // 标签输入处理
   const handleTagKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    // 中文输入法（IME）选词确认也触发 Enter，需跳过，避免把未确认的拼音/候选误当标签
+    if (e.nativeEvent.isComposing) return;
     if (e.key === 'Enter' && tagInput.trim()) {
       e.preventDefault();
       const tag = tagInput.trim();
-      if (!tags.includes(tag)) {
+      // 大小写不敏感去重：`AI` 与 `ai` 视作同一标签
+      if (!tags.some((t) => t.toLowerCase() === tag.toLowerCase())) {
         setTags([...tags, tag]);
       }
       setTagInput('');
@@ -110,7 +200,7 @@ export function EditorPanel() {
   };
 
   const removeTag = (tag: string) => {
-    setTags(tags.filter((t) => t !== tag));
+    setTags(tags.filter((t) => t.toLowerCase() !== tag.toLowerCase()));
   };
 
   // 同步滚动
@@ -157,32 +247,33 @@ export function EditorPanel() {
 
   // 保存
   const handleSave = async () => {
-    if (!title.trim()) {
-      toast.error('请输入标题');
-      return;
-    }
-    if (!projectId) {
-      toast.error('请选择所属项目');
-      return;
-    }
+    // 标题可选：为空时用提示词截断作为默认标题，保证列表/导出可正常展示
+    const fallbackTitle = prompt.trim().replace(/\s+/g, ' ').slice(0, 30) || '未命名灵感';
+    const finalTitle = title.trim() || fallbackTitle;
+
+    // 标签可选：留空时从提示词自动生成
+    const finalTags = tags.length > 0 ? tags : extractTagsFromPrompt(prompt);
+
+    // 所属项目可选：null 表示未分配
+    const finalProjectId = projectId === UNASSIGNED_PROJECT_ID ? null : projectId;
 
     const now = new Date();
 
     if (editingIdeaId) {
       await db.ideas.update(editingIdeaId, {
-        title: title.trim(),
+        title: finalTitle,
         prompt,
-        tags,
-        projectId,
+        tags: finalTags,
+        projectId: finalProjectId,
         updatedAt: now,
       });
       toast.success('灵感已更新');
     } else {
       await db.ideas.add({
-        title: title.trim(),
+        title: finalTitle,
         prompt,
-        tags,
-        projectId,
+        tags: finalTags,
+        projectId: finalProjectId,
         createdAt: now,
         updatedAt: now,
       });
@@ -190,6 +281,7 @@ export function EditorPanel() {
     }
 
     markClean();
+    lastCleanSnapshot.current = { title: finalTitle, prompt, tags: [...finalTags], projectId: finalProjectId ?? UNASSIGNED_PROJECT_ID };
     closeEditor();
   };
 
@@ -209,13 +301,13 @@ export function EditorPanel() {
 
   // beforeunload 拦截：有未保存更改时阻止关闭
   useEffect(() => {
-    if (!isEditorOpen || !isDirty) return;
+    if (!isEditorOpen || !hasUnsavedChanges()) return;
     const handler = (e: BeforeUnloadEvent) => {
       e.preventDefault();
     };
     window.addEventListener('beforeunload', handler);
     return () => window.removeEventListener('beforeunload', handler);
-  }, [isEditorOpen, isDirty]);
+  }, [isEditorOpen, hasUnsavedChanges]);
 
   // Ctrl+S 保存 + Esc 关闭
   useEffect(() => {
@@ -236,7 +328,7 @@ export function EditorPanel() {
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [isEditorOpen, deleteConfirmId, showUnsavedDialog, title, prompt, tags, projectId, editingIdeaId, isDirty, handleCloseRequest]);
+  }, [isEditorOpen, deleteConfirmId, showUnsavedDialog, title, prompt, tags, projectId, editingIdeaId, hasUnsavedChanges, handleCloseRequest]);
 
   return (
     <>
@@ -248,7 +340,7 @@ export function EditorPanel() {
           <DialogDescription>有未保存的更改，是否放弃？</DialogDescription>
         </DialogHeader>
         <DialogFooter>
-          <Button variant="outline" onClick={() => setShowUnsavedDialog(false)}>
+          <Button variant="outline" onClick={handleKeepEditing}>
             继续编辑
           </Button>
           <Button variant="destructive" onClick={handleDiscard}>
@@ -299,11 +391,14 @@ export function EditorPanel() {
       <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-4">
         {/* 标题 */}
         <div className="flex flex-col gap-1.5">
-          <label className="text-sm text-muted-foreground">标题</label>
+          <label className="text-sm text-muted-foreground">
+            标题
+            <span className="ml-1 text-xs text-muted-foreground/70">（可选）</span>
+          </label>
           <Input
             value={title}
             onChange={(e) => setTitle(e.target.value)}
-            placeholder="灵感标题"
+            placeholder="灵感标题（可选，留空用提示词）"
           />
         </div>
 
@@ -337,9 +432,12 @@ export function EditorPanel() {
           </div>
         </div>
 
-        {/* 标签 */}
+        {/* 标签（可选） */}
         <div className="flex flex-col gap-1.5">
-          <label className="text-sm text-muted-foreground">标签</label>
+          <label className="text-sm text-muted-foreground">
+            标签
+            <span className="ml-1 text-xs text-muted-foreground/70">（可选，留空自动生成）</span>
+          </label>
           <Input
             value={tagInput}
             onChange={(e) => setTagInput(e.target.value)}
@@ -363,18 +461,25 @@ export function EditorPanel() {
           )}
         </div>
 
-        {/* 所属项目 */}
+        {/* 所属项目（可选） */}
         <div className="flex flex-col gap-1.5">
-          <label className="text-sm text-muted-foreground">所属项目</label>
+          <label className="text-sm text-muted-foreground">
+            所属项目
+            <span className="ml-1 text-xs text-muted-foreground/70">（可选）</span>
+          </label>
           <Select
-            items={projects.map((p) => ({ label: p.name, value: p.id!.toString() }))}
-            value={projectId?.toString() ?? null}
+            items={[
+              ...projects.map((p) => ({ label: p.name, value: p.id!.toString() })),
+              { label: '未分配', value: String(UNASSIGNED_PROJECT_ID) },
+            ]}
+            value={projectId?.toString() ?? String(UNASSIGNED_PROJECT_ID)}
             onValueChange={(v) => setProjectId(Number(v))}
           >
             <SelectTrigger className="w-full">
               <SelectValue placeholder="选择项目" />
             </SelectTrigger>
             <SelectContent>
+              <SelectItem value={String(UNASSIGNED_PROJECT_ID)}>未分配</SelectItem>
               {projects.map((p) => (
                 <SelectItem key={p.id} value={p.id!.toString()}>
                   {p.name}

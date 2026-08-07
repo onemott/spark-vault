@@ -17,8 +17,8 @@ export interface Project {
 
 export interface Idea {
   id?: number;
-  projectId: number;
-  title: string;
+  projectId: number | null;  // null 表示未分配
+  title?: string;          // 可选：为空时用提示词截断作为展示标题
   prompt: string;          // 可含变量占位符
   tags: string[];
   createdAt: Date;

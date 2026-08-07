@@ -32,3 +32,7 @@ npm run dev
 ```bash
 npm run build
 ```
+
+## `ai-discussions/` — AI 讨论笔记
+
+项目根目录下的 `ai-discussions/` 文件夹用于存放与 AI 讨论各领域知识时产出的文档（硬件方案、设计文档等），**不属于**应用源码，不影响项目构建与运行。内容按领域分门别类存放，详见 `ai-discussions/README.md`。

@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { Plus, Search, Sparkles, Globe, Star } from 'lucide-react';
 import { db } from '@/lib/db';
 import { useStore } from '@/lib/store';
-import { useFilteredIdeas, useGlobalSearchIdeas, useAllProjects, type EnrichedIdea } from '@/hooks/useIdeas';
+import { useFilteredIdeas, useGlobalSearchIdeas, useAllProjects, UNASSIGNED_PROJECT_ID, type EnrichedIdea } from '@/hooks/useIdeas';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -81,7 +81,16 @@ export const IdeasPanel = forwardRef<HTMLDivElement, IdeasPanelProps>(
     };
 
     /** 全局搜索结果点击：跳转到对应项目并选中灵感 */
-    const handleGlobalCardClick = (ideaId: number, projectId: number) => {
+    const handleGlobalCardClick = (ideaId: number, projectId: number | null) => {
+      if (projectId == null) {
+        // 未分配灵感：跳转到「未分配」入口
+        setSelectedCategoryId(null);
+        setSelectedProjectId(UNASSIGNED_PROJECT_ID);
+        setSelectedIdeaId(ideaId);
+        highlightIdeaId.current = ideaId;
+        openEditor(ideaId);
+        return;
+      }
       const project = projectMap.get(projectId);
       if (project) {
         setSelectedCategoryId(project.categoryId);

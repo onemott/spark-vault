@@ -1,10 +1,12 @@
 import { useRef, useState, useEffect } from 'react';
+import { ChevronsRight, Sparkles } from 'lucide-react';
 import { Sidebar } from '@/components/sidebar/Sidebar';
 import { IdeasPanel } from '@/components/ideas/IdeasPanel';
 import { EditorPanel } from '@/components/editor/EditorPanel';
 import { TrashPanel } from '@/components/trash/TrashPanel';
 import { useKeyboardShortcuts } from '@/hooks/useKeyboardShortcuts';
 import { exportAllData } from '@/lib/importExport';
+import { useStore, SIDEBAR_DEFAULT_WIDTH } from '@/lib/store';
 
 const LAST_BACKUP_KEY = 'spark-vault-last-backup';
 const DISMISSED_KEY = 'spark-vault-backup-dismissed';
@@ -33,6 +35,15 @@ function setLocalStorageItem(key: string, value: string): void {
 export function AppLayout() {
   const searchInputRef = useRef<HTMLInputElement>(null);
   useKeyboardShortcuts(searchInputRef);
+
+  const isSidebarCollapsed = useStore((s) => s.isSidebarCollapsed);
+  const toggleSidebar = useStore((s) => s.toggleSidebar);
+  const setSidebarWidth = useStore((s) => s.setSidebarWidth);
+
+  const handleExpandSidebar = () => {
+    setSidebarWidth(SIDEBAR_DEFAULT_WIDTH);
+    toggleSidebar();
+  };
 
   const [showBanner, setShowBanner] = useState(false);
 
@@ -88,6 +99,16 @@ export function AppLayout() {
         </div>
       )}
       <div className="flex flex-1 overflow-hidden">
+        {isSidebarCollapsed && (
+          <button
+            onClick={handleExpandSidebar}
+            className="shrink-0 w-9 flex flex-col items-center py-3 gap-2 border-r border-border bg-sidebar hover:bg-accent/50 transition-colors"
+            title="展开侧边栏"
+          >
+            <ChevronsRight className="size-4 text-muted-foreground" strokeWidth={1.5} />
+            <Sparkles className="size-3.5 text-green-600" strokeWidth={1.5} />
+          </button>
+        )}
         <Sidebar />
         <IdeasPanel searchInputRef={searchInputRef} />
         <EditorPanel />

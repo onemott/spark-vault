@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RC380 有刷直流电机 · 电流环硬件设计方案 v2（优化版）</title>
+<style>
+  body {
+    font-family: -apple-system, "Segoe UI", "Microsoft YaHei", "PingFang SC", sans-serif;
+    color: #1f2937;
+    line-height: 1.7;
+    margin: 0;
+    padding: 0;
+    background: #f3f4f6;
+  }
+  .container {
+    max-width: 860px;
+    margin: 24px auto;
+    background: #ffffff;
+    padding: 40px 48px;
+    border-radius: 12px;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.08);
+  }
+  h1 {
+    font-size: 26px;
+    color: #111827;
+    border-bottom: 3px solid #2563eb;
+    padding-bottom: 12px;
+    margin-top: 0;
+  }
+  h1 .ver {
+    font-size: 14px;
+    color: #2563eb;
+    background: #eff6ff;
+    border-radius: 6px;
+    padding: 2px 10px;
+    vertical-align: middle;
+    margin-left: 8px;
+  }
+  h2 {
+    font-size: 20px;
+    color: #1d4ed8;
+    margin-top: 32px;
+    border-left: 4px solid #2563eb;
+    padding-left: 12px;
+  }
+  h3 {
+    font-size: 17px;
+    color: #374151;
+    margin-top: 24px;
+  }
+  p { margin: 10px 0; }
+  strong { color: #111827; }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 16px 0 24px;
+    font-size: 14px;
+  }
+  thead th {
+    background: #2563eb;
+    color: #fff;
+    text-align: left;
+    padding: 10px 12px;
+    border: 1px solid #1e40af;
+  }
+  tbody td {
+    padding: 9px 12px;
+    border: 1px solid #e5e7eb;
+    vertical-align: top;
+  }
+  tbody tr:nth-child(even) { background: #f8fafc; }
+  tr.best td { background: #ecfdf5 !important; }
+  code {
+    background: #f1f5f9;
+    border: 1px solid #e2e8f0;
+    border-radius: 4px;
+    padding: 1px 6px;
+    font-family: "SFMono-Regular", Consolas, "Courier New", monospace;
+    font-size: 13px;
+    color: #b91c1c;
+  }
+  pre {
+    background: #0f172a;
+    color: #e2e8f0;
+    padding: 14px 16px;
+    border-radius: 8px;
+    overflow-x: auto;
+    font-size: 13px;
+    line-height: 1.6;
+  }
+  pre code { background: transparent; border: none; color: inherit; }
+  ul, ol { padding-left: 24px; }
+  li { margin: 6px 0; }
+  .warning {
+    background: #fef2f2;
+    border-left: 4px solid #dc2626;
+    padding: 12px 16px;
+    border-radius: 0 8px 8px 0;
+    margin: 16px 0;
+  }
+  .tip {
+    background: #eff6ff;
+    border-left: 4px solid #2563eb;
+    padding: 12px 16px;
+    border-radius: 0 8px 8px 0;
+    margin: 16px 0;
+  }
+  .change {
+    background: #f0fdf4;
+    border-left: 4px solid #16a34a;
+    padding: 12px 16px;
+    border-radius: 0 8px 8px 0;
+    margin: 16px 0;
+  }
+  .footer {
+    text-align: center;
+    color: #9ca3af;
+    font-size: 12px;
+    margin-top: 32px;
+    padding-top: 16px;
+    border-top: 1px solid #e5e7eb;
+  }
+</style>
+</head>
+<body>
+<div class="container">
+
+<h1>RC380 有刷直流电机 · 电流环硬件设计方案 <span class="ver">v2 优化版</span></h1>
+
+<p>智能车竞赛经典 <strong>380 有刷直流电机</strong> 的电流环采样方案。本版在 v1 基础上修正了量程利用率、滤波器截止频率、开尔文接法等关键问题，并补充 PWM 同步采样与硬件限流策略。</p>
+
+<h2>0. v1 → v2 变更清单（先读这里）</h2>
+<table>
+<thead>
+<tr><th>#</th><th>项目</th><th>v1 原方案</th><th>v2 优化</th><th>原因</th></tr>
+</thead>
+<tbody>
+<tr><td>1</td><td>采样电阻</td><td>5mΩ / 2W</td><td><strong>10mΩ / 3W</strong></td><td>ADC 量程利用率 44% → 87%，空载分辨率翻倍</td></tr>
+<tr><td>2</td><td>检测放大器</td><td>INA180A1</td><td><strong>INA181A1</strong>（或直接用 DRV8701 内置放大器）</td><td>失调 ±500µV → ±150µV，等效电流误差 50mA → 15mA</td></tr>
+<tr><td>3</td><td>输出 RC 滤波</td><td>47Ω+2.2nF（fc≈1.5MHz）</td><td><strong>3.3kΩ+10nF（fc≈4.8kHz，按 17kHz PWM 设计）</strong></td><td>原 fc 对 PWM 纹波完全无效；fc 须跟随 PWM 频率</td></tr>
+<tr><td>4</td><td>采样时序</td><td>未提及</td><td><strong>PWM 同步采样（下管导通中点触发）</strong></td><td>低侧采样在续流期间测不到电流，必须同步</td></tr>
+<tr><td>5</td><td>堵转保护</td><td>仅软件 50ms 阈值</td><td><strong>DRV8701 VREF 逐周期硬件限流</strong> + 软件后备</td><td>14.4A 堵转下软件 50ms 足以烧管</td></tr>
+<tr><td>6</td><td>开尔文接法</td><td>"必须用四端开尔文封装"</td><td>修正为<strong>开尔文焊盘布局</strong>（WSLP 为两端子）</td><td>表述不准确，且两端子+开尔文走线已足够</td></tr>
+<tr><td>7</td><td>方案 C（INA240）</td><td>备选</td><td><strong>删除</strong></td><td>INA240 的高共模抑制对低侧采样无意义</td></tr>
+</tbody>
+</table>
+
+<h2>1. 核心参数与设计约束</h2>
+<table>
+<thead>
+<tr><th>参数</th><th>数值</th><th>对电流采样的影响</th></tr>
+</thead>
+<tbody>
+<tr><td><strong>额定电压</strong></td><td>DC 9V</td><td>低压系统，无需隔离，低侧非隔离采样最优</td></tr>
+<tr><td><strong>空载电流</strong></td><td>&lt; 430 mA</td><td><strong>极低！</strong> 决定低速/轻载时的分辨率要求</td></tr>
+<tr><td><strong>堵转电流</strong></td><td>&lt; 14.4 A</td><td><strong>极高！</strong> 动态范围 33:1（14.4A / 0.43A）</td></tr>
+<tr><td><strong>持续工作电流</strong></td><td>约 3–5 A（赛道负载估计）</td><td>决定采样电阻长期发热与驱动选型</td></tr>
+<tr><td><strong>空载转速</strong></td><td>18500 rpm</td><td>高频换向噪声源，需源头 EMI 抑制</td></tr>
+</tbody>
+</table>
+
+<div class="warning">
+<p><strong>⚠️ 最大挑战：33:1 的动态范围</strong></p>
+<p>同一通道既要分辨 <strong>0.43A</strong>（空载微调），又要扛住 <strong>14.4A</strong>（堵转/起步）。12-bit ADC @3.3V 基准 ≈ 0.806mV/码，设计的核心就是：<strong>让 14.4A 尽量占满量程、又不削顶</strong>。</p>
+</div>
+
+<h2>2. 采样电阻选型（v2 核心修正）</h2>
+
+<h3>2.1 三方案定量对比（增益均取 20 V/V）</h3>
+<table>
+<thead>
+<tr><th>方案</th><th>@14.4A 输出</th><th>量程利用率</th><th>@0.43A 输出</th><th>空载码值(12-bit)</th><th>电阻功耗@堵转</th></tr>
+</thead>
+<tbody>
+<tr><td>5mΩ（v1）</td><td>1.44 V</td><td>44%</td><td>43 mV</td><td>≈53 码</td><td>1.04 W</td></tr>
+<tr><td>7mΩ</td><td>2.02 V</td><td>61%</td><td>60 mV</td><td>≈75 码</td><td>1.45 W</td></tr>
+<tr class="best"><td><strong>10mΩ（v2 推荐）</strong></td><td><strong>2.88 V</strong></td><td><strong>87%</strong></td><td><strong>86 mV</strong></td><td><strong>≈107 码</strong></td><td>2.07 W（选 3W）</td></tr>
+</tbody>
+</table>
+
+<ul>
+<li><strong>推荐阻值：10 mΩ</strong>。堵转压降 144mV，相对 9V 母线损耗仅 1.6%，可忽略。</li>
+<li><strong>功率额定</strong>：P = 14.4² × 0.010 ≈ 2.1W。堵转是瞬态（有硬件限流兜底），选 <strong>3W</strong> 合金电阻即可；长期 3–5A 运行时功耗仅 0.09–0.25W。</li>
+<li><strong>型号推荐</strong>：<strong>Vishay WSLP2512L1000FEA</strong>（10mΩ, 3W, TCR ±75ppm/°C）或 <strong>Bourns CSS2H-2512R-L100F</strong>。</li>
+</ul>
+
+<div class="change">
+<p><strong>✅ 开尔文接法（勘误）</strong>：WSLP/CSS 系列是<strong>两端子封装</strong>，正确做法是<strong>开尔文焊盘布局</strong>——采样走线从电阻焊盘内侧单独引出，不与主电流路径共用铜箔。两端子+开尔文走线在 15A 内精度足够；若要真四端子，选 Isabellenhütte BVR/BVT 系列（成本高，比赛无必要）。</p>
+</div>
+
+<h2>3. 电流检测放大器</h2>
+<ul>
+<li><strong>所需增益</strong>：G = 3.0V / 0.144V ≈ 20.8 → 取标准增益 <strong>20 V/V</strong>，@14.4A 输出 2.88V，留 0.4V 防饱和余量。</li>
+<li><strong>首选：INA181A1</strong>（20 V/V）。
+  <ul>
+    <li>关键指标是<strong>输入失调电压</strong>：INA181 Vos ≤ ±150µV → 等效电流误差 150µV/10mΩ = <strong>15mA</strong>（空载的 3.5%，可接受）。</li>
+    <li>v1 选的 INA180 Vos ≤ ±500µV → 等效 <strong>50mA</strong> 误差（空载的 12%），不建议。</li>
+    <li>带宽 350kHz，远高于电流环需求，OK。</li>
+  </ul>
+</li>
+<li><strong>更优解：直接用 DRV8701 内置采样放大器</strong>（增益固定 20 V/V，SO 引脚输出）。
+  <ul>
+    <li>省掉外置 INA181，BOM −1，且与驱动布局天然紧凑。</li>
+    <li>外置放大器仅在用 TB67H450 或纯分立 MOS 时需要。</li>
+  </ul>
+</li>
+<li><strong>输入端滤波</strong>：采样电阻到放大器输入串 10Ω×2 + 差模 1nF（fc≈8MHz），抑制射频级噪声，不影响信号。</li>
+</ul>
+
+<h2>4. 滤波与采样时序（v2 核心修正）</h2>
+
+<h3>4.1 输出级 RC：fc 必须跟随 PWM 频率设计</h3>
+<ul>
+<li>v1 的 47Ω+2.2nF（fc≈1.5MHz）<strong>对 kHz 级 PWM 电流纹波完全无效</strong>，只是心理安慰。</li>
+<li><strong>设计规则：fc 取电流环带宽的 2–3 倍、PWM 频率的 1/3 以下</strong>，单级 RC 对 PWM 基波才能获得 ≥10dB 衰减。</li>
+<li><strong>推荐取值（PWM = 17kHz，避开可闻频段）：3.3kΩ + 10nF C0G → fc ≈ 4.8kHz</strong>。
+  <ul>
+    <li>对 17kHz 纹波衰减 ≈ 11dB，配合 4.2 节同步采样后残余纹波可忽略。</li>
+    <li>对 1–2kHz 电流环穿越频率仅引入 11–23° 相移，不影响环路稳定性。</li>
+    <li>3.3kΩ 源阻抗下 STM32 ADC 采样周期设 <code>239.5 cycles</code>，10nF 电容兼作采样保持电荷桶。</li>
+  </ul>
+</li>
+<li>其他 PWM 频率换算：<code>C = 10nF 固定，R ≈ 1/(2π·fc·C)</code>。如 PWM=10kHz 取 fc≈3.3kHz（R=4.7kΩ）；PWM=20kHz 取 fc≈6.8kHz（R=2.2kΩ）。</li>
+</ul>
+
+<div class="warning">
+<p><strong>⚠️ 17kHz PWM 的纹波量级（为什么同步采样是必需而非可选）</strong></p>
+<p>380 电机电感很小（约几十~200µH），按 L=100µH、D=0.5 估算：ΔI = V·D(1−D)/(L·f) ≈ 9×0.25/(100µH×17kHz) ≈ <strong>1.3A 峰峰值纹波</strong>。随机时刻采样会落在纹波任意相位，读数剧烈抖动。只有在<strong>下管导通中点</strong>采样（对称三角波中点电流 = 平均电流），才能从时序上根除纹波影响。</p>
+</div>
+
+<h3>4.2 PWM 同步采样（低侧采样的必修课）</h3>
+<div class="warning">
+<p><strong>⚠️ 低侧采样只在下管导通时有电流流过。</strong>续流（上管体二极管/同步整流）期间采样电阻电流为 0，随机时刻采样会得到系统性偏低、且随占空比抖动的读数。</p>
+</div>
+<ul>
+<li><strong>做法</strong>：用定时器中心对齐 PWM，在<strong>下管导通区间的中点</strong>触发 ADC 注入转换（STM32：TIM1 TRGO → ADC 注入通道）。</li>
+<li><strong>采样窗口核算（17kHz）</strong>：周期 58.8µs，5% 最小占空比 → 导通 2.9µs；扣除边沿振铃 ~1µs 后开始转换，12-bit @21MHz ADC 约 1.2µs 完成，窗口足够。</li>
+<li>低占空比时下管导通时间过短，需限制最小占空比（如 5%）或在该区间改用上次有效值。</li>
+</ul>
+
+<h3>4.3 电机端源头吸收（保留 v1，仍是最重要的 EMI 手段）</h3>
+<ul>
+<li>电机两引脚间并联 <strong>100nF C0G</strong>，每个引脚对电机外壳各接 <strong>100nF</strong>（Y 电容布局），电容引线越短越好，直接焊在电机端子上。</li>
+<li>必要时在电源入口串 <strong>磁珠（600Ω@100MHz）</strong> 隔离电机噪声与逻辑电源。</li>
+</ul>
+
+<h2>5. 驱动与堵转保护（v2 核心修正）</h2>
+<ol>
+<li><strong>驱动选型</strong>：
+  <ul>
+    <li><strong>首选 DRV8701</strong>（外置 MOS，栅极驱动电流可调）：堵转 14.4A 由外置 MOS 扛，且<strong>内置 20V/V 采样放大器</strong>。</li>
+    <li>外置 MOS 选 <strong>AON6244 / IRLR7843</strong>（Rds(on) &lt; 5mΩ，DFN5×6）。</li>
+    <li>TB67H450（内置 MOS，峰值 4.5A）仅适合严格限流场景，<strong>不推荐</strong>用于可能堵转的驱动轮。</li>
+  </ul>
+</li>
+<li><strong>硬件逐周期限流（必须有）</strong>：
+  <ul>
+    <li>DRV8701 的 <strong>VREF 引脚</strong>设定斩波阈值：I_chop = VREF / (G × R_sense)。例：VREF = 1.0V → I_chop = 1.0 / (20 × 0.010) = <strong>5A 逐周期限流</strong>，堵转瞬间电流被硬件钳住，软件 50ms 根本来不及的事交给它。</li>
+    <li>VREF 可由 MCU DAC 输出 → <strong>软件可调限流</strong>，起步给大限流、巡线给小限流。</li>
+  </ul>
+</li>
+<li><strong>软件后备保护</strong>：电流 &gt; 12A 持续 &gt; 50ms → 关 PWM 并报错（防硬件限流失效）；配合温度估计（I²t 积分）做电机热保护。</li>
+</ol>
+
+<h2>6. PCB 布局要点</h2>
+<ol>
+<li><strong>开尔文走线</strong>：采样电阻焊盘内侧单独引出差分对到放大器输入，远离 MOS 开关节点（SW）和栅极回路。</li>
+<li><strong>星型接地</strong>：功率地（采样电阻 GND、母线电容 GND）与信号地（放大器、MCU）单点汇接于母线电容负极；ADC 参考地走模拟地平面。</li>
+<li><strong>母线电容</strong>：驱动入口 ≥ <strong>220µF 电解 + 100nF 陶瓷</strong>紧贴 H 桥；9V 母线预留 <strong>SMBJ12A TVS</strong> 吸收制动回灌电压尖峰。</li>
+<li><strong>热设计</strong>：采样电阻与 MOS 下方铺铜 + 过孔阵列散热；电阻远离放大器输入端，减少热梯度引起的温漂。</li>
+</ol>
+
+<h2>7. 软件策略</h2>
+<ul>
+<li><strong>硬件过采样</strong>：STM32 ADC 开 16× 过采样 → 有效约 14 bit；空载 107 码 → 等效 ~428 码，0.43A 区间分辨率 &lt; 1mA。16× 过采样已含平均效果，可与 4.1 节 RC 滤波叠加。</li>
+<li><strong>零点自校准</strong>：上电时 PWM=0 采 32 次取均值存为零点偏移，消除放大器失调的批次差异。</li>
+<li><strong>分段 PID</strong>：低速区（&lt;1A）高 P 增益保证响应；重载区（&gt;5A）降增益防超调。</li>
+<li><strong>电流环带宽</strong>：目标 1–5kHz 足够有刷电机力矩控制；不必追求更高，否则噪声主导。</li>
+</ul>
+
+<h2>8. 最终 BOM（单电机通道，基于 DRV8701 方案）</h2>
+<table>
+<thead>
+<tr><th>器件</th><th>型号/规格</th><th>数量</th><th>作用</th></tr>
+</thead>
+<tbody>
+<tr><td><strong>采样电阻</strong></td><td>10mΩ, 3W, 2512 合金（Vishay WSLP2512L1000FEA）</td><td>1</td><td>电流→电压转换，开尔文焊盘</td></tr>
+<tr><td><strong>驱动 + 采样放大</strong></td><td>DRV8701（内置 20V/V 放大器）</td><td>1</td><td>栅极驱动 + 电流放大 + VREF 限流</td></tr>
+<tr><td><strong>功率 MOS</strong></td><td>AON6244（N-CH 40V, DFN5×6）</td><td>4</td><td>H 桥</td></tr>
+<tr><td><strong>输入滤波</strong></td><td>10Ω ×2 + 1nF C0G 差模</td><td>1 组</td><td>射频噪声抑制</td></tr>
+<tr><td><strong>输出滤波</strong></td><td>3.3kΩ + 10nF C0G 0402</td><td>各1</td><td>fc≈4.8kHz（对应 17kHz PWM）</td></tr>
+<tr><td><strong>母线电容</strong></td><td>220µF 电解 + 100nF 陶瓷</td><td>各1</td><td>母线储能/退耦</td></tr>
+<tr><td><strong>TVS</strong></td><td>SMBJ12A</td><td>1</td><td>制动回灌尖峰吸收</td></tr>
+<tr><td><strong>电机吸收电容</strong></td><td>100nF C0G ×3（跨接 + 双 Y 电容）</td><td>3</td><td><strong>源头 EMI 抑制</strong></td></tr>
+</tbody>
+</table>
+<p><em>备选（分立放大器路线，用于 TB67H450 或纯分立驱动）：INA181A1IDBVR + 上述相同外围。</em></p>
+
+<div class="tip">
+<p><strong>💡 总结</strong>：v2 相对 v1 的核心收益——<strong>同样 12-bit ADC，空载分辨率翻倍（53→107 码）、失调误差降为 1/3（50→15mA）、PWM 纹波真正被滤掉、堵转由硬件逐周期限流兜底</strong>。BOM 成本基本持平（DRV8701 方案反而省掉外置放大器），完全满足智能车精准速度环 + 力矩限制的需求。</p>
+</div>
+
+<div class="footer">RC380 有刷直流电机 · 电流环硬件设计方案 v2（优化版）</div>
+</div>
+</body>
+</html>

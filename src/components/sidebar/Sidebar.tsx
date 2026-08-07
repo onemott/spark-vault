@@ -1,9 +1,10 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useCallback, useEffect } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { AnimatePresence, motion } from 'motion/react';
 import {
   ChevronRight,
   ChevronDown,
+  ChevronsLeft,
   FolderPlus,
   FilePlus,
   FileText,
@@ -36,10 +37,11 @@ import {
   Pencil,
   Trash2,
   RotateCcw,
+  Inbox,
 } from 'lucide-react';
 import { db } from '@/lib/db';
-import { useStore } from '@/lib/store';
-import { useCategories, useProjects } from '@/hooks/useIdeas';
+import { useStore, SIDEBAR_MIN_WIDTH, SIDEBAR_DEFAULT_WIDTH } from '@/lib/store';
+import { useCategories, useProjects, UNASSIGNED_PROJECT_ID } from '@/hooks/useIdeas';
 import { exportAllData, importAllData, getSnapshots, rollbackFromSnapshot } from '@/lib/importExport';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
@@ -107,6 +109,49 @@ export function Sidebar() {
   const openTrash = useStore((s) => s.openTrash);
   const theme = useStore((s) => s.theme);
   const setTheme = useStore((s) => s.setTheme);
+  const sidebarWidth = useStore((s) => s.sidebarWidth);
+  const isSidebarCollapsed = useStore((s) => s.isSidebarCollapsed);
+  const setSidebarWidth = useStore((s) => s.setSidebarWidth);
+  const toggleSidebar = useStore((s) => s.toggleSidebar);
+  const setSidebarCollapsed = useStore((s) => s.setSidebarCollapsed);
+
+  // 拖拽调整宽度
+  const dragRef = useRef<{ startX: number; startWidth: number } | null>(null);
+
+  const onResizeStart = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    dragRef.current = { startX: e.clientX, startWidth: sidebarWidth };
+    document.body.classList.add('select-none');
+    // 悬停时仍保持可拖拽
+    const onMove = (ev: PointerEvent) => {
+      if (!dragRef.current) return;
+      const delta = ev.clientX - dragRef.current.startX;
+      setSidebarWidth(dragRef.current.startWidth + delta);
+    };
+    const onUp = () => {
+      dragRef.current = null;
+      document.body.classList.remove('select-none');
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+    };
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+  }, [sidebarWidth, setSidebarWidth]);
+
+  // 拖拽过程中若宽度达到最小时自动折叠
+  useEffect(() => {
+    if (sidebarWidth <= SIDEBAR_MIN_WIDTH && !isSidebarCollapsed) {
+      setSidebarCollapsed(true);
+    }
+  }, [sidebarWidth, isSidebarCollapsed, setSidebarCollapsed]);
+
+  // 展开时恢复默认宽度
+  const handleToggleSidebar = () => {
+    if (isSidebarCollapsed) {
+      setSidebarWidth(SIDEBAR_DEFAULT_WIDTH);
+    }
+    toggleSidebar();
+  };
 
   // 快照列表（用于回滚）
   const snapshots = useLiveQuery(() => getSnapshots(), []) ?? [];
@@ -269,16 +314,38 @@ export function Sidebar() {
   const ThemeIcon = theme === 'light' ? Sun : theme === 'dark' ? Moon : Monitor;
 
   return (
-    <div className="w-[260px] shrink-0 border-r border-border bg-sidebar flex flex-col">
+    <AnimatePresence initial={false}>
+    {!isSidebarCollapsed && (
+    <motion.div
+      className="relative shrink-0 border-r border-border bg-sidebar flex flex-col overflow-hidden"
+      initial={{ width: 0, opacity: 0 }}
+      animate={{ width: sidebarWidth, opacity: 1 }}
+      exit={{ width: 0, opacity: 0 }}
+      transition={{ duration: 0.2, ease: 'easeInOut' }}
+    >
       {/* 顶部 logo */}
       <div className="flex items-center gap-2 px-4 py-3 border-b border-border">
         <Sparkles className="size-5 text-green-600" strokeWidth={1.5} />
-        <span className="text-sm font-semibold">Spark Vault</span>
+        <span className="text-sm font-semibold whitespace-nowrap">Spark Vault</span>
       </div>
 
       {/* 分类树 */}
       <ScrollArea className="flex-1">
         <div className="py-2">
+          {/* 未分配入口 */}
+          <button
+            className={`flex w-full items-center gap-1.5 px-3 py-1.5 text-sm hover:bg-accent/50 transition-colors ${
+              selectedProjectId === UNASSIGNED_PROJECT_ID ? 'bg-accent text-accent-foreground' : 'text-muted-foreground'
+            }`}
+            onClick={() => {
+              setSelectedCategoryId(null);
+              handleSelectProject(UNASSIGNED_PROJECT_ID);
+            }}
+            title="未分配灵感的灵感"
+          >
+            <Inbox className="size-4 shrink-0" strokeWidth={1.5} />
+            <span className="truncate">未分配</span>
+          </button>
           {categories.map((cat) => (
             <CategoryTreeItem
               key={cat.id}
@@ -355,15 +422,17 @@ export function Sidebar() {
         </Button>
         {snapshots.length > 0 && (
           <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                title="从快照回滚"
-              >
-                <RotateCcw strokeWidth={1.5} />
-              </Button>
-            </DropdownMenuTrigger>
+            <DropdownMenuTrigger
+              render={
+                <Button
+                  variant="ghost"
+                  size="icon-sm"
+                  title="从快照回滚"
+                >
+                  <RotateCcw strokeWidth={1.5} />
+                </Button>
+              }
+            />
             <DropdownMenuContent align="end">
               {snapshots.map((snap) => (
                 <DropdownMenuItem
@@ -383,6 +452,14 @@ export function Sidebar() {
           title={`主题: ${theme}`}
         >
           <ThemeIcon strokeWidth={1.5} />
+        </Button>
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          onClick={handleToggleSidebar}
+          title="收起侧边栏"
+        >
+          <ChevronsLeft strokeWidth={1.5} />
         </Button>
       </div>
 
@@ -560,7 +637,17 @@ export function Sidebar() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    </div>
+
+      {/* 拖拽调整宽度手柄 */}
+      <div
+        onPointerDown={onResizeStart}
+        className="absolute top-0 right-0 bottom-0 w-1.5 z-10 cursor-col-resize group/resize"
+      >
+        <div className="absolute inset-y-0 right-0 w-[3px] bg-transparent transition-colors group-hover/resize:bg-green-500 group-active/resize:bg-green-500" />
+      </div>
+    </motion.div>
+    )}
+    </AnimatePresence>
   );
 }
 

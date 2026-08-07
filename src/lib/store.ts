@@ -1,9 +1,36 @@
 import { create } from 'zustand';
 import { db } from './db';
+import { UNASSIGNED_PROJECT_ID } from '@/hooks/useIdeas';
 
 type ThemeMode = 'light' | 'dark' | 'system';
 
 const THEME_KEY = 'spark-vault-theme';
+const SELECTION_KEY = 'spark-vault-selection';
+const SIDEBAR_WIDTH_KEY = 'spark-vault-sidebar-width';
+const SIDEBAR_COLLAPSED_KEY = 'spark-vault-sidebar-collapsed';
+
+// 侧边栏宽度范围
+export const SIDEBAR_MIN_WIDTH = 200;
+export const SIDEBAR_MAX_WIDTH = 480;
+export const SIDEBAR_DEFAULT_WIDTH = 260;
+
+function readStoredSidebarWidth(): number {
+  try {
+    const v = Number(localStorage.getItem(SIDEBAR_WIDTH_KEY));
+    if (Number.isFinite(v) && v > 0) return v;
+  } catch {
+    // ignore
+  }
+  return SIDEBAR_DEFAULT_WIDTH;
+}
+
+function readStoredSidebarCollapsed(): boolean {
+  try {
+    return localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
 
 function readStoredTheme(): ThemeMode {
   try {
@@ -13,6 +40,36 @@ function readStoredTheme(): ThemeMode {
     // localStorage 不可用时忽略
   }
   return 'system';
+}
+
+/**
+ * 从 localStorage 读取上次选中的位置
+ * 返回 { categoryId, projectId }，都可能为 null
+ * projectId 可能为 -1（未分配哨兵值），这里原样返回，由上层 UI 解释
+ */
+function readStoredSelection(): { categoryId: number | null; projectId: number | null } {
+  try {
+    const raw = localStorage.getItem(SELECTION_KEY);
+    if (!raw) return { categoryId: null, projectId: null };
+    const parsed = JSON.parse(raw);
+    return {
+      categoryId: typeof parsed.categoryId === 'number' ? parsed.categoryId : null,
+      projectId: typeof parsed.projectId === 'number' ? parsed.projectId : null,
+    };
+  } catch {
+    return { categoryId: null, projectId: null };
+  }
+}
+
+function writeStoredSelection(categoryId: number | null, projectId: number | null): void {
+  try {
+    localStorage.setItem(
+      SELECTION_KEY,
+      JSON.stringify({ categoryId, projectId })
+    );
+  } catch {
+    // ignore
+  }
 }
 
 /**
@@ -82,6 +139,10 @@ interface AppState {
   // 主题
   theme: ThemeMode;
 
+  // 侧边栏 UI 状态
+  sidebarWidth: number;
+  isSidebarCollapsed: boolean;
+
   // Actions
   setSelectedCategoryId: (id: number | null) => void;
   setSelectedProjectId: (id: number | null) => void;
@@ -91,9 +152,13 @@ interface AppState {
   toggleTag: (tag: string) => void;
   openEditor: (ideaId?: number) => void;
   closeEditor: () => void;
+  setEditingIdeaId: (id: number | null) => void;
   setInitialEditorValues: (values: EditorInitialValues) => void;
   markClean: () => void;
   setTheme: (theme: ThemeMode) => void;
+  setSidebarWidth: (width: number) => void;
+  toggleSidebar: () => void;
+  setSidebarCollapsed: (collapsed: boolean) => void;
 
   // 回收站 UI actions
   openTrash: () => void;
@@ -119,34 +184,50 @@ interface AppState {
   emptyTrash: () => Promise<void>;
 }
 
-export const useStore = create<AppState>((set) => ({
-  // 选中状态
-  selectedCategoryId: null,
-  selectedProjectId: null,
-  selectedIdeaId: null,
+export const useStore = create<AppState>((set, get) => {
+  // 从 localStorage 恢复上次选中的位置（首次访问无记忆时，默认显示「未分配」，避免空白）
+  const stored = readStoredSelection();
+  const initialProjectId = stored.projectId ?? UNASSIGNED_PROJECT_ID;
+  const initialCategoryId = stored.categoryId ?? null;
 
-  // 搜索与筛选
-  searchQuery: '',
-  activeTags: [],
-  isGlobalSearch: false,
+  return {
+    // 选中状态
+    selectedCategoryId: initialCategoryId,
+    selectedProjectId: initialProjectId,
+    selectedIdeaId: null,
 
-  // UI 状态
-  isEditorOpen: false,
-  editingIdeaId: null,
+    // 搜索与筛选
+    searchQuery: '',
+    activeTags: [],
+    isGlobalSearch: initialProjectId === null,
 
-  // 回收站 UI
-  isTrashOpen: false,
+    // UI 状态
+    isEditorOpen: false,
+    editingIdeaId: null,
 
-  // 编辑器初始值快照
-  initialEditorValues: null,
+    // 回收站 UI
+    isTrashOpen: false,
 
-  // 主题：从 localStorage 初始化
-  theme: readStoredTheme(),
+    // 编辑器初始值快照
+    initialEditorValues: null,
 
-  // Actions
-  setSelectedCategoryId: (id) => set({ selectedCategoryId: id }),
-  setSelectedProjectId: (id) => set({ selectedProjectId: id, isGlobalSearch: id === null }),
-  setSelectedIdeaId: (id) => set({ selectedIdeaId: id }),
+    // 主题：从 localStorage 初始化
+    theme: readStoredTheme(),
+
+    // 侧边栏 UI 状态：从 localStorage 初始化
+    sidebarWidth: readStoredSidebarWidth(),
+    isSidebarCollapsed: readStoredSidebarCollapsed(),
+
+    // Actions
+    setSelectedCategoryId: (id) => {
+      set({ selectedCategoryId: id });
+      writeStoredSelection(id, get().selectedProjectId);
+    },
+    setSelectedProjectId: (id) => {
+      set({ selectedProjectId: id, isGlobalSearch: id === null });
+      writeStoredSelection(get().selectedCategoryId, id);
+    },
+    setSelectedIdeaId: (id) => set({ selectedIdeaId: id }),
 
   setSearchQuery: (q) => set({ searchQuery: q }),
 
@@ -172,6 +253,8 @@ export const useStore = create<AppState>((set) => ({
       initialEditorValues: null,
     }),
 
+  setEditingIdeaId: (id) => set({ editingIdeaId: id }),
+
   setInitialEditorValues: (values) =>
     set({ initialEditorValues: values }),
 
@@ -194,6 +277,37 @@ export const useStore = create<AppState>((set) => ({
     }
     applyTheme(theme);
     set({ theme });
+  },
+
+  setSidebarWidth: (width) => {
+    const clamped = Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, width));
+    try {
+      localStorage.setItem(SIDEBAR_WIDTH_KEY, String(clamped));
+    } catch {
+      // ignore
+    }
+    set({ sidebarWidth: clamped });
+  },
+
+  toggleSidebar: () => {
+    set((state) => {
+      const collapsed = !state.isSidebarCollapsed;
+      try {
+        localStorage.setItem(SIDEBAR_COLLAPSED_KEY, collapsed ? '1' : '0');
+      } catch {
+        // ignore
+      }
+      return { isSidebarCollapsed: collapsed };
+    });
+  },
+
+  setSidebarCollapsed: (collapsed) => {
+    try {
+      localStorage.setItem(SIDEBAR_COLLAPSED_KEY, collapsed ? '1' : '0');
+    } catch {
+      // ignore
+    }
+    set({ isSidebarCollapsed: collapsed });
   },
 
   // 分类/项目 CRUD
@@ -294,7 +408,8 @@ export const useStore = create<AppState>((set) => ({
     const deletedIdeas = allIdeas.filter(i => i.deletedAt);
     await db.ideas.bulkDelete(deletedIdeas.map(i => i.id!));
   },
-}));
+};
+});
 
 // 应用初始主题（在模块加载时执行一次）
 applyTheme(useStore.getState().theme);

@@ -2,6 +2,9 @@ import { useLiveQuery } from 'dexie-react-hooks';
 import { db } from '@/lib/db';
 import type { Idea } from '@/types';
 
+/** 未分配项目的哨兵值（selectedProjectId 用于表示「未分配」入口） */
+export const UNASSIGNED_PROJECT_ID = -1;
+
 /** 带有来源信息的灵感（全局搜索模式） */
 export interface EnrichedIdea extends Idea {
   projectName: string;
@@ -10,11 +13,19 @@ export interface EnrichedIdea extends Idea {
 
 /**
  * 获取当前项目的所有灵感（带搜索和标签过滤）
+ * projectId 为 -1 时表示「未分配」项目（projectId 为 null 的灵感）
  */
 export function useFilteredIdeas(projectId: number | null, searchQuery: string, activeTags: string[]) {
   return useLiveQuery(async () => {
-    if (!projectId) return [];
-    let ideas = await db.ideas.where('projectId').equals(projectId).reverse().sortBy('createdAt');
+    if (projectId === null) return [];
+    let ideas: Idea[];
+    if (projectId === UNASSIGNED_PROJECT_ID) {
+      ideas = await db.ideas.toArray();
+      ideas = ideas.filter((i) => i.projectId === null);
+      ideas.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+    } else {
+      ideas = await db.ideas.where('projectId').equals(projectId).reverse().sortBy('createdAt');
+    }
 
     // 过滤已软删除
     ideas = ideas.filter(idea => !idea.deletedAt);
@@ -28,7 +39,7 @@ export function useFilteredIdeas(projectId: number | null, searchQuery: string, 
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase();
       ideas = ideas.filter(idea =>
-        idea.title.toLowerCase().includes(q) ||
+        (idea.title ?? '').toLowerCase().includes(q) ||
         idea.prompt.toLowerCase().includes(q) ||
         idea.tags.some(tag => tag.toLowerCase().includes(q))
       );
@@ -115,7 +126,7 @@ export function useGlobalSearchIdeas(searchQuery: string, activeTags: string[]) 
       const q = searchQuery.toLowerCase();
       results = results.filter(
         (idea) =>
-          idea.title.toLowerCase().includes(q) ||
+          (idea.title ?? '').toLowerCase().includes(q) ||
           idea.prompt.toLowerCase().includes(q) ||
           idea.tags.some((tag) => tag.toLowerCase().includes(q))
       );
@@ -124,15 +135,15 @@ export function useGlobalSearchIdeas(searchQuery: string, activeTags: string[]) 
     // 附加来源信息
     const enriched = results
       .map((idea) => {
-        const project = projectMap.get(idea.projectId);
+        const project = idea.projectId != null ? projectMap.get(idea.projectId) : undefined;
         const category = project ? categoryMap.get(project.categoryId) : undefined;
         return {
           ...idea,
-          projectName: project?.name ?? '未知项目',
-          categoryName: category?.name ?? '未知分类',
+          projectName: project?.name ?? '未分配',
+          categoryName: category?.name ?? '未分配',
         };
       })
-      .filter((r) => r.projectName !== '未知项目'); // 过滤孤立数据
+      .filter((r) => r.projectName !== '未知项目'); // 过滤孤立数据（项目已删除但未清理）
 
     // 收藏置顶
     enriched.sort((a, b) => {

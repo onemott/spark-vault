@@ -172,11 +172,21 @@ kbd {
 .prompt-editor-highlight {
   position: absolute;
   inset: 0;
-  overflow: hidden;
+  /* 关键：原生滚动条必须隐藏，且行为与 textarea 完全一致。
+     在 Windows 上滚动条会占据实际宽度（约 15px），若两层对滚动条的处理不一致，
+     可用宽度就会不同 → 换行位置不同 → 光标与实际输入文字错位。
+     统一隐藏滚动条并使用 JS 手动同步滚动（见 handleScroll），两层宽度始终相等。 */
+  overflow: auto;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
   pointer-events: none;
   color: var(--foreground);
   background: transparent;
   z-index: 0;
+}
+
+.prompt-editor-highlight::-webkit-scrollbar {
+  display: none;
 }
 
 .prompt-editor-highlight code {
@@ -189,7 +199,9 @@ kbd {
   background-color: oklch(0.75 0.18 155 / 18%);
   color: oklch(0.45 0.15 155);
   border-radius: 0.25rem;
-  padding: 0 0.125rem;
+  /* 不设水平 padding：高亮层与透明文本层必须逐字对齐，任何 padding 都会造成错位 */
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
 }
 
 .dark .prompt-var-highlight {
@@ -210,6 +222,13 @@ kbd {
   outline: none;
   overflow: auto;
   display: block;
+  /* 隐藏原生滚动条，与高亮层保持一致（可用宽度一致），滚动位置由 JS 同步 */
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.prompt-editor-textarea::-webkit-scrollbar {
+  display: none;
 }
 
 .prompt-editor-textarea::placeholder {
