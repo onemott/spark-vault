@@ -1,0 +1,54 @@
+# Spark Vault CI 流水线
+# 代码 push 或创建 PR 时自动执行：安装依赖 → Lint 检查 → 构建 → 上传产物
+
+name: CI
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main]
+
+# 同一分支多次 push 时，取消旧的正在跑的任务，节省资源
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Lint & Build
+    runs-on: ubuntu-latest
+
+    steps:
+      # 第 1 步：拉取代码
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # 第 2 步：安装 Node.js（并缓存 npm 依赖加速）
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      # 第 3 步：安装项目依赖（按 lockfile 严格安装）
+      - name: Install dependencies
+        run: npm ci
+
+      # 第 4 步：ESLint 代码规范检查
+      # 如果 eslint 尚未配置好，不会阻断整个 CI
+      - name: Lint
+        run: npm run lint
+        continue-on-error: true
+
+      # 第 5 步：类型检查 + 构建（tsc -b && vite build）
+      - name: Build
+        run: npm run build
+
+      # 第 6 步：上传构建产物（保留 7 天，可从 Actions 页面下载）
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+          retention-days: 7
