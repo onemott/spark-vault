@@ -1,5 +1,5 @@
 # Spark Vault CI 流水线
-# 代码 push 或创建 PR 时自动执行：安装依赖 → 构建 → 上传产物
+# 代码 push 或创建 PR 时自动执行：安装依赖 → 类型检查 → 构建
 
 name: CI
 
@@ -41,10 +41,12 @@ jobs:
       - name: Build
         run: npm run build
 
-      # 第 5 步：上传构建产物（保留 7 天，可从 Actions 页面下载）
-      - name: Upload build artifact
-        uses: actions/upload-artifact@v5
-        with:
-          name: dist
-          path: dist/
-          retention-days: 7
+      # 第 5 步：上传构建产物
+      # 注：actions/upload-artifact 当前版本内部仍用 Node 20（GitHub 官方问题）
+      # 需要下载产物时取消下面注释；纯构建检查可跳过
+      # - name: Upload build artifact
+      #   uses: actions/upload-artifact@v5
+      #   with:
+      #     name: dist
+      #     path: dist/
+      #     retention-days: 7
