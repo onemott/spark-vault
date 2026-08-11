@@ -1,5 +1,7 @@
 # Spark Vault - 项目灵感收集器
 
+[![CI](https://github.com/onemott/spark-vault/actions/workflows/ci.yml/badge.svg)](https://github.com/onemott/spark-vault/actions/workflows/ci.yml)
+
 一个面向学生的创意灵感收集与管理工具，采用极简 IDE 风格界面，数据全部存储在浏览器 IndexedDB 中，零后端依赖。
 
 ## 功能特性
