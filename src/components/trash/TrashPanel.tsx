@@ -201,6 +201,8 @@ export function TrashPanel() {
   );
 }
 
+export default TrashPanel;
+
 /* 分区组件 */
 function TrashSection({
   title,

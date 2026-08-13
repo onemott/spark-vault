@@ -8,16 +8,29 @@ const THEME_KEY = 'spark-vault-theme';
 const SELECTION_KEY = 'spark-vault-selection';
 const SIDEBAR_WIDTH_KEY = 'spark-vault-sidebar-width';
 const SIDEBAR_COLLAPSED_KEY = 'spark-vault-sidebar-collapsed';
+const IDEAS_WIDTH_KEY = 'spark-vault-ideas-width';
+const IDEAS_COLLAPSED_KEY = 'spark-vault-ideas-collapsed';
 
 // 侧边栏宽度范围
-export const SIDEBAR_MIN_WIDTH = 200;
+// SIDEBAR_MIN_WIDTH：正常使用时的最小宽度（拖拽会停在这附近）
+// SIDEBAR_COLLAPSE_THRESHOLD：拖拽低于此宽度时自动折叠（比 MIN 小，留出「窄栏」空间）
+export const SIDEBAR_MIN_WIDTH = 180;
 export const SIDEBAR_MAX_WIDTH = 480;
 export const SIDEBAR_DEFAULT_WIDTH = 260;
+export const SIDEBAR_COLLAPSE_THRESHOLD = 120;
+
+// 右栏（灵感列表）宽度范围
+export const IDEAS_MIN_WIDTH = 260;
+export const IDEAS_MAX_WIDTH = 520;
+export const IDEAS_DEFAULT_WIDTH = 380;
 
 function readStoredSidebarWidth(): number {
   try {
     const v = Number(localStorage.getItem(SIDEBAR_WIDTH_KEY));
-    if (Number.isFinite(v) && v > 0) return v;
+    if (Number.isFinite(v) && v > 0) {
+      // 持久化的宽度至少是最小可见宽度（避免之前存了过窄的值）
+      return Math.max(SIDEBAR_MIN_WIDTH, v);
+    }
   } catch {
     // ignore
   }
@@ -27,6 +40,24 @@ function readStoredSidebarWidth(): number {
 function readStoredSidebarCollapsed(): boolean {
   try {
     return localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+function readStoredIdeasWidth(): number {
+  try {
+    const v = Number(localStorage.getItem(IDEAS_WIDTH_KEY));
+    if (Number.isFinite(v) && v > 0) return v;
+  } catch {
+    // ignore
+  }
+  return IDEAS_DEFAULT_WIDTH;
+}
+
+function readStoredIdeasCollapsed(): boolean {
+  try {
+    return localStorage.getItem(IDEAS_COLLAPSED_KEY) === '1';
   } catch {
     return false;
   }
@@ -133,6 +164,16 @@ interface AppState {
   // 回收站 UI
   isTrashOpen: boolean;
 
+  // 游戏化面板 UI（方向一/三/五）
+  isForestOpen: boolean;
+  isDrawOpen: boolean;
+  isTasksOpen: boolean;
+  isAchievementsOpen: boolean;
+  isCollectionOpen: boolean;
+  isPkOpen: boolean;
+  isCardOpen: boolean;
+  cardIdeaId: number | null;
+
   // 编辑器初始值快照（用于 isDirty 计算）
   initialEditorValues: EditorInitialValues | null;
 
@@ -142,6 +183,10 @@ interface AppState {
   // 侧边栏 UI 状态
   sidebarWidth: number;
   isSidebarCollapsed: boolean;
+
+  // 右栏（灵感列表）UI 状态
+  ideasWidth: number;
+  isIdeasCollapsed: boolean;
 
   // Actions
   setSelectedCategoryId: (id: number | null) => void;
@@ -160,9 +205,30 @@ interface AppState {
   toggleSidebar: () => void;
   setSidebarCollapsed: (collapsed: boolean) => void;
 
+  // 右栏（灵感列表）UI actions
+  setIdeasWidth: (width: number) => void;
+  toggleIdeas: () => void;
+  setIdeasCollapsed: (collapsed: boolean) => void;
+
   // 回收站 UI actions
   openTrash: () => void;
   closeTrash: () => void;
+
+  // 游戏化面板 UI actions（方向一/三/五）
+  openForest: () => void;
+  closeForest: () => void;
+  openDraw: () => void;
+  closeDraw: () => void;
+  openTasks: () => void;
+  closeTasks: () => void;
+  openAchievements: () => void;
+  closeAchievements: () => void;
+  openCollection: () => void;
+  closeCollection: () => void;
+  openPk: () => void;
+  closePk: () => void;
+  openCard: (ideaId?: number) => void;
+  closeCard: () => void;
 
   // 分类/项目 CRUD
   updateCategory: (id: number, data: { name?: string; icon?: string }) => Promise<void>;
@@ -208,6 +274,16 @@ export const useStore = create<AppState>((set, get) => {
     // 回收站 UI
     isTrashOpen: false,
 
+    // 游戏化面板 UI（方向一/三/五）
+    isForestOpen: false,
+    isDrawOpen: false,
+    isTasksOpen: false,
+    isAchievementsOpen: false,
+    isCollectionOpen: false,
+    isPkOpen: false,
+    isCardOpen: false,
+    cardIdeaId: null,
+
     // 编辑器初始值快照
     initialEditorValues: null,
 
@@ -217,6 +293,10 @@ export const useStore = create<AppState>((set, get) => {
     // 侧边栏 UI 状态：从 localStorage 初始化
     sidebarWidth: readStoredSidebarWidth(),
     isSidebarCollapsed: readStoredSidebarCollapsed(),
+
+    // 右栏（灵感列表）UI 状态：从 localStorage 初始化
+    ideasWidth: readStoredIdeasWidth(),
+    isIdeasCollapsed: readStoredIdeasCollapsed(),
 
     // Actions
     setSelectedCategoryId: (id) => {
@@ -269,6 +349,22 @@ export const useStore = create<AppState>((set, get) => {
   openTrash: () => set({ isTrashOpen: true }),
   closeTrash: () => set({ isTrashOpen: false }),
 
+  // 游戏化面板 UI actions（方向一/三/五）
+  openForest: () => set({ isForestOpen: true }),
+  closeForest: () => set({ isForestOpen: false }),
+  openDraw: () => set({ isDrawOpen: true }),
+  closeDraw: () => set({ isDrawOpen: false }),
+  openTasks: () => set({ isTasksOpen: true }),
+  closeTasks: () => set({ isTasksOpen: false }),
+  openAchievements: () => set({ isAchievementsOpen: true }),
+  closeAchievements: () => set({ isAchievementsOpen: false }),
+  openCollection: () => set({ isCollectionOpen: true }),
+  closeCollection: () => set({ isCollectionOpen: false }),
+  openPk: () => set({ isPkOpen: true }),
+  closePk: () => set({ isPkOpen: false }),
+  openCard: (ideaId) => set({ isCardOpen: true, cardIdeaId: ideaId !== undefined ? ideaId : null }),
+  closeCard: () => set({ isCardOpen: false, cardIdeaId: null }),
+
   setTheme: (theme) => {
     try {
       localStorage.setItem(THEME_KEY, theme);
@@ -280,7 +376,9 @@ export const useStore = create<AppState>((set, get) => {
   },
 
   setSidebarWidth: (width) => {
-    const clamped = Math.min(SIDEBAR_MAX_WIDTH, Math.max(SIDEBAR_MIN_WIDTH, width));
+    // 拖拽时允许低于 SIDEBAR_MIN_WIDTH（以便触发自动折叠），
+    // 但最小为 0、最大为 SIDEBAR_MAX_WIDTH
+    const clamped = Math.min(SIDEBAR_MAX_WIDTH, Math.max(0, width));
     try {
       localStorage.setItem(SIDEBAR_WIDTH_KEY, String(clamped));
     } catch {
@@ -308,6 +406,38 @@ export const useStore = create<AppState>((set, get) => {
       // ignore
     }
     set({ isSidebarCollapsed: collapsed });
+  },
+
+  // 右栏（灵感列表）UI actions
+  setIdeasWidth: (width) => {
+    const clamped = Math.min(IDEAS_MAX_WIDTH, Math.max(IDEAS_MIN_WIDTH, width));
+    try {
+      localStorage.setItem(IDEAS_WIDTH_KEY, String(clamped));
+    } catch {
+      // ignore
+    }
+    set({ ideasWidth: clamped });
+  },
+
+  toggleIdeas: () => {
+    set((state) => {
+      const collapsed = !state.isIdeasCollapsed;
+      try {
+        localStorage.setItem(IDEAS_COLLAPSED_KEY, collapsed ? '1' : '0');
+      } catch {
+        // ignore
+      }
+      return { isIdeasCollapsed: collapsed };
+    });
+  },
+
+  setIdeasCollapsed: (collapsed) => {
+    try {
+      localStorage.setItem(IDEAS_COLLAPSED_KEY, collapsed ? '1' : '0');
+    } catch {
+      // ignore
+    }
+    set({ isIdeasCollapsed: collapsed });
   },
 
   // 分类/项目 CRUD

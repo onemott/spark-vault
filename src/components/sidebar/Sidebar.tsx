@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, useEffect } from 'react';
+import { useState, useRef, useCallback, useEffect, lazy, Suspense } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { AnimatePresence, motion } from 'motion/react';
 import {
@@ -14,84 +14,24 @@ import {
   Moon,
   Monitor,
   Sparkles,
-  Folder,
-  Globe,
-  BookOpen,
-  Code,
-  Lightbulb,
-  Palette,
-  Music,
-  Camera,
-  Heart,
-  Star,
-  Zap,
-  Home,
-  Briefcase,
-  GraduationCap,
-  Gamepad2,
-  Plane,
-  Coffee,
-  ShoppingCart,
-  Dumbbell,
-  TreePine,
   Pencil,
   Trash2,
   RotateCcw,
   Inbox,
 } from 'lucide-react';
 import { db } from '@/lib/db';
-import { useStore, SIDEBAR_MIN_WIDTH, SIDEBAR_DEFAULT_WIDTH } from '@/lib/store';
+import { useStore, SIDEBAR_MIN_WIDTH, SIDEBAR_DEFAULT_WIDTH, SIDEBAR_COLLAPSE_THRESHOLD } from '@/lib/store';
 import { useCategories, useProjects, UNASSIGNED_PROJECT_ID } from '@/hooks/useIdeas';
 import { exportAllData, importAllData, getSnapshots, rollbackFromSnapshot } from '@/lib/importExport';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogFooter,
-  DialogDescription,
-} from '@/components/ui/dialog';
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu';
-import { Input } from '@/components/ui/input';
-import { Textarea } from '@/components/ui/textarea';
 import { toast } from 'sonner';
+import { getIconComponent } from './icons';
+import { GameHub } from '@/components/game/GameHub';
 
-// 图标映射
-const ICON_MAP: Record<string, React.ComponentType<{ strokeWidth?: number; size?: number; className?: string }>> = {
-  folder: Folder,
-  globe: Globe,
-  book: BookOpen,
-  code: Code,
-  lightbulb: Lightbulb,
-  palette: Palette,
-  music: Music,
-  camera: Camera,
-  heart: Heart,
-  star: Star,
-  zap: Zap,
-  home: Home,
-  briefcase: Briefcase,
-  graduation: GraduationCap,
-  gamepad: Gamepad2,
-  plane: Plane,
-  coffee: Coffee,
-  shopping: ShoppingCart,
-  dumbbell: Dumbbell,
-  tree: TreePine,
-};
-
-const ICON_OPTIONS = Object.keys(ICON_MAP);
-
-function getIconComponent(iconName: string) {
-  return ICON_MAP[iconName] || Sparkles;
-}
+// 侧边栏的模态对话框与快照回滚菜单依赖 @base-ui/react，懒加载避免拖慢首屏
+const SidebarDialogs = lazy(() => import('./SidebarDialogs'));
+const SnapshotRollbackMenu = lazy(() => import('./SnapshotRollbackMenu'));
 
 /**
  * 左侧边栏：分类折叠树 + 底部工具栏
@@ -133,14 +73,23 @@ export function Sidebar() {
       document.body.classList.remove('select-none');
       window.removeEventListener('pointermove', onMove);
       window.removeEventListener('pointerup', onUp);
+      // 松手时吸附：若宽度在「塌缩阈值 ~ 最小可见宽度」之间，吸附到最小可见宽度
+      // 避免出现一个"很窄但又没完全收起"的尴尬状态
+      if (
+        sidebarWidth > SIDEBAR_COLLAPSE_THRESHOLD &&
+        sidebarWidth < SIDEBAR_MIN_WIDTH
+      ) {
+        setSidebarWidth(SIDEBAR_MIN_WIDTH);
+      }
     };
     window.addEventListener('pointermove', onMove);
     window.addEventListener('pointerup', onUp);
   }, [sidebarWidth, setSidebarWidth]);
 
-  // 拖拽过程中若宽度达到最小时自动折叠
+  // 拖拽过程中若宽度达到阈值时自动折叠
+  // 注：阈值（120px）远小于最小可见宽度（180px），用户可以拉到窄栏而不塌
   useEffect(() => {
-    if (sidebarWidth <= SIDEBAR_MIN_WIDTH && !isSidebarCollapsed) {
+    if (sidebarWidth <= SIDEBAR_COLLAPSE_THRESHOLD && !isSidebarCollapsed) {
       setSidebarCollapsed(true);
     }
   }, [sidebarWidth, isSidebarCollapsed, setSidebarCollapsed]);
@@ -329,6 +278,9 @@ export function Sidebar() {
         <span className="text-sm font-semibold whitespace-nowrap">Spark Vault</span>
       </div>
 
+      {/* 游乐场入口（游戏化功能） */}
+      <GameHub />
+
       {/* 分类树 */}
       <ScrollArea className="flex-1">
         <div className="py-2">
@@ -421,29 +373,15 @@ export function Sidebar() {
           <Trash2 strokeWidth={1.5} />
         </Button>
         {snapshots.length > 0 && (
-          <DropdownMenu>
-            <DropdownMenuTrigger
-              render={
-                <Button
-                  variant="ghost"
-                  size="icon-sm"
-                  title="从快照回滚"
-                >
-                  <RotateCcw strokeWidth={1.5} />
-                </Button>
-              }
-            />
-            <DropdownMenuContent align="end">
-              {snapshots.map((snap) => (
-                <DropdownMenuItem
-                  key={snap.id}
-                  onClick={() => handleRollback(snap.id!)}
-                >
-                  {new Date(snap.createdAt).toLocaleString()}
-                </DropdownMenuItem>
-              ))}
-            </DropdownMenuContent>
-          </DropdownMenu>
+          <Suspense
+            fallback={
+              <Button variant="ghost" size="icon-sm" title="从快照回滚">
+                <RotateCcw strokeWidth={1.5} />
+              </Button>
+            }
+          >
+            <SnapshotRollbackMenu snapshots={snapshots} handleRollback={handleRollback} />
+          </Suspense>
         )}
         <Button
           variant="ghost"
@@ -463,180 +401,51 @@ export function Sidebar() {
         </Button>
       </div>
 
-      {/* 新建分类对话框 */}
-      <Dialog open={showNewCategoryDialog} onOpenChange={setShowNewCategoryDialog}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>新建分类</DialogTitle>
-          </DialogHeader>
-          <Input
-            value={newCategoryName}
-            onChange={(e) => setNewCategoryName(e.target.value)}
-            placeholder="分类名称"
-            onKeyDown={(e) => e.key === 'Enter' && handleCreateCategory()}
+      {/* 侧边栏模态对话框（懒加载，仅在任一对话框打开时挂载） */}
+      {(showNewCategoryDialog ||
+        showNewProjectDialog ||
+        editingCategory ||
+        deletingCategory ||
+        editingProject ||
+        deletingProject) && (
+        <Suspense fallback={null}>
+          <SidebarDialogs
+            showNewCategoryDialog={showNewCategoryDialog}
+            setShowNewCategoryDialog={setShowNewCategoryDialog}
+            newCategoryName={newCategoryName}
+            setNewCategoryName={setNewCategoryName}
+            handleCreateCategory={handleCreateCategory}
+            showNewProjectDialog={showNewProjectDialog}
+            setShowNewProjectDialog={setShowNewProjectDialog}
+            newProjectName={newProjectName}
+            setNewProjectName={setNewProjectName}
+            newProjectDesc={newProjectDesc}
+            setNewProjectDesc={setNewProjectDesc}
+            handleCreateProject={handleCreateProject}
+            editingCategory={editingCategory}
+            setEditingCategory={setEditingCategory}
+            editCategoryName={editCategoryName}
+            setEditCategoryName={setEditCategoryName}
+            editCategoryIcon={editCategoryIcon}
+            setEditCategoryIcon={setEditCategoryIcon}
+            handleSaveEditCategory={handleSaveEditCategory}
+            deletingCategory={deletingCategory}
+            setDeletingCategory={setDeletingCategory}
+            handleConfirmDeleteCategory={handleConfirmDeleteCategory}
+            editingProject={editingProject}
+            setEditingProject={setEditingProject}
+            editProjectName={editProjectName}
+            setEditProjectName={setEditProjectName}
+            editProjectDesc={editProjectDesc}
+            setEditProjectDesc={setEditProjectDesc}
+            handleSaveEditProject={handleSaveEditProject}
+            deletingProject={deletingProject}
+            setDeletingProject={setDeletingProject}
+            handleConfirmDeleteProject={handleConfirmDeleteProject}
           />
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setShowNewCategoryDialog(false)}>
-              取消
-            </Button>
-            <Button onClick={handleCreateCategory}>创建</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+        </Suspense>
+      )}
 
-      {/* 新建项目对话框 */}
-      <Dialog open={showNewProjectDialog} onOpenChange={setShowNewProjectDialog}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>新建项目</DialogTitle>
-          </DialogHeader>
-          <div className="flex flex-col gap-3">
-            <Input
-              value={newProjectName}
-              onChange={(e) => setNewProjectName(e.target.value)}
-              placeholder="项目名称"
-            />
-            <Textarea
-              value={newProjectDesc}
-              onChange={(e) => setNewProjectDesc(e.target.value)}
-              placeholder="项目描述（可选）"
-            />
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setShowNewProjectDialog(false)}>
-              取消
-            </Button>
-            <Button onClick={handleCreateProject}>创建</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* 编辑分类对话框 */}
-      <Dialog open={!!editingCategory} onOpenChange={(open) => !open && setEditingCategory(null)}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>编辑分类</DialogTitle>
-          </DialogHeader>
-          <div className="flex flex-col gap-4">
-            <Input
-              value={editCategoryName}
-              onChange={(e) => setEditCategoryName(e.target.value)}
-              placeholder="分类名称"
-              onKeyDown={(e) => e.key === 'Enter' && handleSaveEditCategory()}
-            />
-            <div className="flex flex-col gap-2">
-              <span className="text-sm text-muted-foreground">选择图标</span>
-              <div className="flex flex-wrap gap-1.5">
-                {ICON_OPTIONS.map((iconName) => {
-                  const Icon = ICON_MAP[iconName];
-                  return (
-                    <button
-                      key={iconName}
-                      className={`flex items-center justify-center size-8 rounded border transition-colors ${
-                        editCategoryIcon === iconName
-                          ? 'border-green-600 bg-green-600/10 text-green-600'
-                          : 'border-border hover:bg-accent/50 text-muted-foreground'
-                      }`}
-                      onClick={() => setEditCategoryIcon(iconName)}
-                      title={iconName}
-                    >
-                      <Icon className="size-4" strokeWidth={1.5} />
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setEditingCategory(null)}>
-              取消
-            </Button>
-            <Button onClick={handleSaveEditCategory}>保存</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* 删除分类确认对话框 */}
-      <Dialog open={!!deletingCategory} onOpenChange={(open) => !open && setDeletingCategory(null)}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>删除分类</DialogTitle>
-            <DialogDescription>
-              确定要删除分类「{deletingCategory?.name}」吗？
-              {deletingCategory && deletingCategory.projectCount > 0 && (
-                <>该分类下有 <kbd className="px-1.5 py-0.5 text-xs border border-border rounded bg-accent">{deletingCategory.projectCount}</kbd> 个项目及其所有灵感将一并删除。</>
-              )}
-              {deletingCategory && deletingCategory.projectCount === 0 && (
-                <>该分类下暂无项目。</>
-              )}
-              该分类及下属项目和灵感将被移入回收站，可在回收站中恢复。
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setDeletingCategory(null)}>
-              取消
-            </Button>
-            <Button variant="destructive" onClick={handleConfirmDeleteCategory}>
-              删除
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* 编辑项目对话框 */}
-      <Dialog open={!!editingProject} onOpenChange={(open) => !open && setEditingProject(null)}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>编辑项目</DialogTitle>
-          </DialogHeader>
-          <div className="flex flex-col gap-3">
-            <Input
-              value={editProjectName}
-              onChange={(e) => setEditProjectName(e.target.value)}
-              placeholder="项目名称"
-              onKeyDown={(e) => e.key === 'Enter' && handleSaveEditProject()}
-            />
-            <Textarea
-              value={editProjectDesc}
-              onChange={(e) => setEditProjectDesc(e.target.value)}
-              placeholder="项目描述（可选）"
-            />
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setEditingProject(null)}>
-              取消
-            </Button>
-            <Button onClick={handleSaveEditProject}>保存</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* 删除项目确认对话框 */}
-      <Dialog open={!!deletingProject} onOpenChange={(open) => !open && setDeletingProject(null)}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>删除项目</DialogTitle>
-            <DialogDescription>
-              确定要删除项目「{deletingProject?.name}」吗？
-              {deletingProject && deletingProject.ideaCount > 0 && (
-                <>该项目下有 <kbd className="px-1.5 py-0.5 text-xs border border-border rounded bg-accent">{deletingProject.ideaCount}</kbd> 条灵感将一并删除。</>
-              )}
-              {deletingProject && deletingProject.ideaCount === 0 && (
-                <>该项目下暂无灵感。</>
-              )}
-              该项目及下属灵感将被移入回收站，可在回收站中恢复。
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setDeletingProject(null)}>
-              取消
-            </Button>
-            <Button variant="destructive" onClick={handleConfirmDeleteProject}>
-              删除
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
 
       {/* 拖拽调整宽度手柄 */}
       <div

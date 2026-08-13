@@ -1,12 +1,24 @@
-import { useRef, useState, useEffect } from 'react';
+import { useRef, useState, useEffect, lazy, Suspense } from 'react';
 import { ChevronsRight, Sparkles } from 'lucide-react';
 import { Sidebar } from '@/components/sidebar/Sidebar';
 import { IdeasPanel } from '@/components/ideas/IdeasPanel';
-import { EditorPanel } from '@/components/editor/EditorPanel';
-import { TrashPanel } from '@/components/trash/TrashPanel';
 import { useKeyboardShortcuts } from '@/hooks/useKeyboardShortcuts';
+import { toast } from 'sonner';
+
+// 编辑器与回收站仅在打开时才渲染内容，故做代码分割，避免拖慢首次启动
+const EditorPanel = lazy(() => import('@/components/editor/EditorPanel'));
+const TrashPanel = lazy(() => import('@/components/trash/TrashPanel'));
+// 游戏化面板（方向一/三/四/五）同样懒加载
+const ForestPanel = lazy(() => import('@/components/game/ForestPanel').then((m) => ({ default: m.ForestPanel })));
+const DrawDialog = lazy(() => import('@/components/game/DrawDialog').then((m) => ({ default: m.DrawDialog })));
+const TasksDialog = lazy(() => import('@/components/game/TasksDialog').then((m) => ({ default: m.TasksDialog })));
+const AchievementsDialog = lazy(() => import('@/components/game/AchievementsDialog').then((m) => ({ default: m.AchievementsDialog })));
+const CollectionDialog = lazy(() => import('@/components/game/CollectionDialog').then((m) => ({ default: m.CollectionDialog })));
+const PkDialog = lazy(() => import('@/components/game/PkDialog').then((m) => ({ default: m.PkDialog })));
+const CardGeneratorDialog = lazy(() => import('@/components/cards/CardGeneratorDialog').then((m) => ({ default: m.CardGeneratorDialog })));
 import { exportAllData } from '@/lib/importExport';
 import { useStore, SIDEBAR_DEFAULT_WIDTH } from '@/lib/store';
+import { initGameSystems, ACHIEVEMENTS } from '@/lib/game';
 
 const LAST_BACKUP_KEY = 'spark-vault-last-backup';
 const DISMISSED_KEY = 'spark-vault-backup-dismissed';
@@ -30,7 +42,8 @@ function setLocalStorageItem(key: string, value: string): void {
 }
 
 /**
- * 三栏布局：左侧边栏 | 中间灵感列表 | 右侧编辑器/回收站
+ * 三栏布局：左侧边栏 | 中间编辑器（记录灵感） | 右侧灵感列表 / 回收站
+ * 编辑是核心功能，放在中间主区域；灵感列表在右侧浏览。
  */
 export function AppLayout() {
   const searchInputRef = useRef<HTMLInputElement>(null);
@@ -74,6 +87,26 @@ export function AppLayout() {
     setShowBanner(false);
   };
 
+  // 启动时初始化游戏系统：自动签到 + 存活成长同步 + 成就校验
+  // 延迟执行，避免与首屏渲染、备份提醒争抢资源
+  useEffect(() => {
+    let cancelled = false;
+    const timer = window.setTimeout(async () => {
+      const newly = await initGameSystems();
+      if (cancelled) return;
+      for (const id of newly) {
+        const def = ACHIEVEMENTS.find((a) => a.id === id);
+        if (def) {
+          toast(`${def.icon} 解锁成就：${def.name}`, { description: def.desc });
+        }
+      }
+    }, 800);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, []);
+
   return (
     <div className="flex h-screen flex-col overflow-hidden bg-background text-foreground">
       {showBanner && (
@@ -110,10 +143,24 @@ export function AppLayout() {
           </button>
         )}
         <Sidebar />
+        {/* 编辑器居中为主面板；回收站始终在最右侧滑出 */}
+        <Suspense fallback={null}>
+          <EditorPanel />
+        </Suspense>
         <IdeasPanel searchInputRef={searchInputRef} />
-        <EditorPanel />
-        <TrashPanel />
+        <Suspense fallback={null}>
+          <TrashPanel />
+        </Suspense>
       </div>
+
+      {/* 游戏化面板/对话框（懒加载，经 portal 渲染） */}
+      <Suspense fallback={null}><ForestPanel /></Suspense>
+      <Suspense fallback={null}><DrawDialog /></Suspense>
+      <Suspense fallback={null}><TasksDialog /></Suspense>
+      <Suspense fallback={null}><AchievementsDialog /></Suspense>
+      <Suspense fallback={null}><CollectionDialog /></Suspense>
+      <Suspense fallback={null}><PkDialog /></Suspense>
+      <Suspense fallback={null}><CardGeneratorDialog /></Suspense>
     </div>
   );
 }

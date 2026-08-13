@@ -23,7 +23,7 @@ Windows 下可用根目录的 `启动.bat` 一键启停：双击启动；已在�
 
 **所有用户数据存储在浏览器 IndexedDB（Dexie 库名 `SparkVault`），不在项目文件里。**
 
-- 表：`categories`、`projects`、`ideas`、`snapshots`（见 `src/lib/db.ts`）。
+- 表：`categories`、`projects`、`ideas`、`snapshots`、`dailyState`、`energyAccount`、`achievements`、`pkMatches`（见 `src/lib/db.ts`）。
 - 数据绑在**本地浏览器**。修改代码、重新部署、git 操作**不会**影响数据，也不会被 git 提交（数据不在仓库中）。
 - 数据会在以下情况丢失：清浏览器「清除站点数据」、换浏览器/设备、浏览器主动清理存储。
 - `db.ts` 已调用 `navigator.storage.persist()` 申请持久化以降低被清理风险，但**不保证**。
@@ -34,11 +34,17 @@ Windows 下可用根目录的 `启动.bat` 一键启停：双击启动；已在�
 - 单项目导出 Markdown：`exportProjectMarkdown`。
 - 导入/回滚前都会自动创建快照，便于反悔。
 
-### 数据库 schema（当前版本 2，`CURRENT_SCHEMA_VERSION`）
+### 数据库 schema（当前版本 3，`CURRENT_SCHEMA_VERSION`）
 - `categories`：`++id, name, sortOrder, deletedAt`
 - `projects`：`++id, categoryId, name, createdAt, deletedAt`
-- `ideas`：`++id, projectId, title, createdAt, updatedAt, *tags, isFavorite, deletedAt`
-- `snapshots`：`++id, createdAt, data`（data 为全库 JSON 字符串）
+- `ideas`：`++id, projectId, title, createdAt, updatedAt, *tags, isFavorite, deletedAt`（另有成长/PK 字段：`growthPoints`、`growthLevel`、`growthUpdatedAt`、`editCount`、`copyCount`、`eloRating`、`pkWins`、`pkLosses`、`pkMatches`，均为可选、未建索引）
+- `snapshots`：`++id, createdAt, data`（data 为全库 JSON 字符串，含全部 7 张业务表）
+- `dailyState`：`date`（YYYY-MM-DD 主键，签到/抽卡次数/任务进度/每日成长上限计数）
+- `energyAccount`：`id`（单行 id=1，能量余额）
+- `achievements`：`id`（成就 id，未解锁的也存 progress）
+- `pkMatches`：`++id, ideaAId, ideaBId, createdAt`（本地 PK 对局记录）
+
+> 游戏化功能（方向一/三/五）全部纯本地实现，核心逻辑见 `src/lib/game.ts`；稀有度为**运行时计算**（`computeRarity`），不落库。备份/导入/快照/回滚已覆盖新表，见 `importExport.ts`。用 `npx tsx scripts/game-smoke.ts` / `scripts/migration-smoke.ts` 可离线回归验证。
 
 > `idea.projectId` 可为 `null`（表示「未分配」，用哨兵值 `UNASSIGNED_PROJECT_ID = -1` 在 UI 中表示，见 `useIdeas.ts`）。侧栏有「未分配」入口集中展示 `projectId === null` 的灵感。`title` 可选（空时用提示词截断）；`tags` 可选（空时用 `extractTagsFromPrompt` 从提示词自动生成，见 `utils.ts`）。
 
@@ -54,22 +60,32 @@ src/
   App.tsx                   # 根组件，路由/布局装配
   main.tsx                  # 入口
   index.css                 # Tailwind v4 样式
-  types/index.ts            # 领域类型：Category/Project/Idea/Snapshot
+  types/index.ts            # 领域类型：Category/Project/Idea/Snapshot/DailyState/EnergyAccount/Achievement/PkMatch
   lib/
     db.ts                   # Dexie 数据库定义 + schema + 迁移 + 清理
     store.ts                # zustand 全局状态
     importExport.ts         # 导入导出/快照/回滚/迁移
     utils.ts                # 工具函数
+    game.ts                 # 游戏化核心逻辑（稀有度/成长/能量/任务/签到/成就/抽卡/Elo/森林）
+    cards.ts                # 灵感卡片模板 + html-to-image 导出
+    samplePrompts.ts        # 内置示例灵感池（空卡池抽卡兜底）
   hooks/
     useIdeas.ts             # 灵感数据 hook
     useKeyboardShortcuts.ts # 快捷键
+    useGame.ts              # 游戏系统数据 hooks（只读 liveQuery）
   components/
     layout/                 # AppLayout, ErrorBoundary
     sidebar/                # Sidebar
     ideas/                  # IdeasPanel, VariableDialog, CopyButton
     editor/                 # EditorPanel
     trash/                  # TrashPanel
+    game/                   # GameHub + 灵感森林/每日任务/成就/图鉴/抽卡/PK 面板
+    cards/                  # CardGeneratorDialog（卡片生成器）
     ui/                     # shadcn/ui 基础组件
+scripts/                     # Node 冒烟测试（fake-indexeddb + tsx）
+  game-smoke.ts             # 游戏系统逻辑测试
+  migration-smoke.ts        # 备份/导入/回滚/v2→v3 迁移测试
+  e2e-browser.mjs           # 端到端浏览器测试（真实 Chrome headless + puppeteer-core，含 PNG 导出）
 ai-discussions/              # AI 讨论笔记（非项目源码，见下文说明）
   README.md                 # 用途与分类规则
   电机驱动与控制/            # 按领域分子文件夹

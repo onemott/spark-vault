@@ -1,4 +1,4 @@
-import { Button as ButtonPrimitive } from "@base-ui/react/button"
+import * as React from "react"
 import { cva, type VariantProps } from "class-variance-authority"
 
 import { cn } from "@/lib/utils"
@@ -40,19 +40,28 @@ const buttonVariants = cva(
   }
 )
 
-function Button({
-  className,
-  variant = "default",
-  size = "default",
-  ...props
-}: ButtonPrimitive.Props & VariantProps<typeof buttonVariants>) {
+/**
+ * 原生 <button> 实现，替代 @base-ui/react/button，使 @base-ui 不再进入首屏。
+ * 样式完全由 className 承担，外观与之前一致。
+ * default type="button" 以避免误触发表单提交；forwardRef 以兼容被其他组件
+ * 用作 render 目标（如 Dialog.Close / Menu.Trigger）时的 ref 注入。
+ */
+const Button = React.forwardRef<
+  HTMLButtonElement,
+  React.ComponentProps<"button"> & VariantProps<typeof buttonVariants>
+>(function Button(
+  { className, variant = "default", size = "default", type = "button", ...props },
+  ref
+) {
   return (
-    <ButtonPrimitive
+    <button
+      ref={ref}
+      type={type}
       data-slot="button"
       className={cn(buttonVariants({ variant, size, className }))}
       {...props}
     />
   )
-}
+})
 
 export { Button, buttonVariants }

@@ -1,11 +1,15 @@
 import { db, CURRENT_SCHEMA_VERSION } from '@/lib/db';
-import { Category, Project, Idea } from '@/types';
+import { Category, Project, Idea, DailyState, EnergyAccount, Achievement, PkMatch } from '@/types';
 import { toast } from 'sonner';
 
 interface BackupData {
   categories: Category[];
   projects: Project[];
   ideas: Idea[];
+  dailyState: DailyState[];
+  energyAccount: EnergyAccount[];
+  achievements: Achievement[];
+  pkMatches: PkMatch[];
   exportedAt: string;
   schemaVersion?: number;
 }
@@ -21,6 +25,10 @@ export async function exportAllData() {
     categories: await db.categories.toArray(),
     projects: await db.projects.toArray(),
     ideas: await db.ideas.toArray(),
+    dailyState: await db.dailyState.toArray(),
+    energyAccount: await db.energyAccount.toArray(),
+    achievements: await db.achievements.toArray(),
+    pkMatches: await db.pkMatches.toArray(),
     exportedAt: new Date().toISOString(),
     schemaVersion: CURRENT_SCHEMA_VERSION,
   };
@@ -45,14 +53,20 @@ export async function exportAllData() {
 /**
  * 还原 Date 字段（JSON.parse 后 Date 变为 string）并补全缺失的默认值
  */
-function restoreDataTypes(data: { categories: Category[]; projects: Project[]; ideas: Idea[] }) {
-  for (const idea of data.ideas) {
+function restoreDataTypes(data: BackupData) {
+  for (const idea of data.ideas ?? []) {
     idea.createdAt = new Date(idea.createdAt as unknown as string);
     idea.updatedAt = new Date(idea.updatedAt as unknown as string);
     if (idea.isFavorite === undefined) idea.isFavorite = false;
   }
-  for (const project of data.projects) {
+  for (const project of data.projects ?? []) {
     project.createdAt = new Date(project.createdAt as unknown as string);
+  }
+  for (const record of data.achievements ?? []) {
+    if (record.unlockedAt) record.unlockedAt = new Date(record.unlockedAt as unknown as string);
+  }
+  for (const match of data.pkMatches ?? []) {
+    match.createdAt = new Date(match.createdAt as unknown as string);
   }
 }
 
@@ -64,6 +78,10 @@ async function serializeCurrentData(): Promise<string> {
     categories: await db.categories.toArray(),
     projects: await db.projects.toArray(),
     ideas: await db.ideas.toArray(),
+    dailyState: await db.dailyState.toArray(),
+    energyAccount: await db.energyAccount.toArray(),
+    achievements: await db.achievements.toArray(),
+    pkMatches: await db.pkMatches.toArray(),
   };
   return JSON.stringify(data);
 }
@@ -110,11 +128,7 @@ export async function rollbackFromSnapshot(snapshotId: number) {
       return;
     }
 
-    const data = JSON.parse(snapshot.data) as {
-      categories: Category[];
-      projects: Project[];
-      ideas: Idea[];
-    };
+    const data = JSON.parse(snapshot.data) as BackupData;
 
     restoreDataTypes(data);
 
@@ -122,10 +136,14 @@ export async function rollbackFromSnapshot(snapshotId: number) {
     // 使用 flag 避免与 importAllData 中的快照逻辑冲突
     await createSnapshot();
 
-    await db.transaction('rw', db.categories, db.projects, db.ideas, async () => {
+    await db.transaction('rw', [db.categories, db.projects, db.ideas, db.dailyState, db.energyAccount, db.achievements, db.pkMatches], async () => {
       await db.categories.clear();
       await db.projects.clear();
       await db.ideas.clear();
+      await db.dailyState.clear();
+      await db.energyAccount.clear();
+      await db.achievements.clear();
+      await db.pkMatches.clear();
 
       if (data.categories.length > 0) {
         await db.categories.bulkAdd(data.categories);
@@ -135,6 +153,18 @@ export async function rollbackFromSnapshot(snapshotId: number) {
       }
       if (data.ideas.length > 0) {
         await db.ideas.bulkAdd(data.ideas);
+      }
+      if (data.dailyState.length > 0) {
+        await db.dailyState.bulkAdd(data.dailyState);
+      }
+      if (data.energyAccount.length > 0) {
+        await db.energyAccount.bulkAdd(data.energyAccount);
+      }
+      if (data.achievements.length > 0) {
+        await db.achievements.bulkAdd(data.achievements);
+      }
+      if (data.pkMatches.length > 0) {
+        await db.pkMatches.bulkAdd(data.pkMatches);
       }
     });
 
@@ -172,10 +202,14 @@ export async function importAllData(file: File) {
     }
 
     // 清除现有数据并导入
-    await db.transaction('rw', db.categories, db.projects, db.ideas, async () => {
+    await db.transaction('rw', [db.categories, db.projects, db.ideas, db.dailyState, db.energyAccount, db.achievements, db.pkMatches], async () => {
       await db.categories.clear();
       await db.projects.clear();
       await db.ideas.clear();
+      await db.dailyState.clear();
+      await db.energyAccount.clear();
+      await db.achievements.clear();
+      await db.pkMatches.clear();
 
       if (data.categories.length > 0) {
         await db.categories.bulkAdd(data.categories);
@@ -185,6 +219,18 @@ export async function importAllData(file: File) {
       }
       if (data.ideas.length > 0) {
         await db.ideas.bulkAdd(data.ideas);
+      }
+      if (data.dailyState.length > 0) {
+        await db.dailyState.bulkAdd(data.dailyState);
+      }
+      if (data.energyAccount.length > 0) {
+        await db.energyAccount.bulkAdd(data.energyAccount);
+      }
+      if (data.achievements.length > 0) {
+        await db.achievements.bulkAdd(data.achievements);
+      }
+      if (data.pkMatches.length > 0) {
+        await db.pkMatches.bulkAdd(data.pkMatches);
       }
     });
 
@@ -212,7 +258,25 @@ function migrateBackupData(data: BackupData, fromVersion: number): void {
       if (category.deletedAt === undefined) category.deletedAt = undefined;
     }
   }
-  // 未来 v2 → v3 迁移在此追加...
+  // v2 → v3：补全养成/PK 字段默认值，并为游戏表补空数组
+  if (fromVersion < 3) {
+    for (const idea of data.ideas) {
+      const createdAt = idea.createdAt instanceof Date ? idea.createdAt : new Date();
+      if (idea.growthPoints === undefined) idea.growthPoints = 20;
+      if (idea.growthLevel === undefined) idea.growthLevel = 2;
+      if (idea.growthUpdatedAt === undefined) idea.growthUpdatedAt = createdAt;
+      if (idea.editCount === undefined) idea.editCount = 0;
+      if (idea.copyCount === undefined) idea.copyCount = 0;
+      if (idea.eloRating === undefined) idea.eloRating = 1000;
+      if (idea.pkWins === undefined) idea.pkWins = 0;
+      if (idea.pkLosses === undefined) idea.pkLosses = 0;
+      if (idea.pkMatches === undefined) idea.pkMatches = 0;
+    }
+    if (!data.dailyState) data.dailyState = [];
+    if (!data.energyAccount) data.energyAccount = [];
+    if (!data.achievements) data.achievements = [];
+    if (!data.pkMatches) data.pkMatches = [];
+  }
 }
 
 /**

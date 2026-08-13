@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { toast } from 'sonner';
-import { X, Save, Trash2 } from 'lucide-react';
+import { X, Save, Trash2, Sparkles, Plus, Droplets, Image as ImageIcon } from 'lucide-react';
 import { db } from '@/lib/db';
 import { useStore } from '@/lib/store';
 import { useIdea, useAllProjects, UNASSIGNED_PROJECT_ID } from '@/hooks/useIdeas';
@@ -24,11 +24,22 @@ import {
   DialogFooter,
   DialogDescription,
 } from '@/components/ui/dialog';
+import {
+  computeRarity,
+  computeGrowthLevel,
+  countVariables,
+  newIdeaGrowthDefaults,
+  recordIdeaCreated,
+  recordIdeaEdited,
+  waterIdea,
+} from '@/lib/game';
+import { RarityBadge, GrowthTag } from '@/components/game/badges';
 
 /**
- * 右侧编辑器面板
+ * 中间编辑器面板（主区域，核心功能）
  * - 新建模式：空表单
  * - 编辑模式：加载 idea 数据
+ * - 未打开时显示空状态占位，引导新建
  */
 
 /** 编辑器的内容上下文：标识表单当前承载的是「编辑某条灵感」还是「新建」 */
@@ -56,7 +67,9 @@ export function EditorPanel() {
   const selectedCategoryId = useStore((s) => s.selectedCategoryId);
   const setSelectedCategoryId = useStore((s) => s.setSelectedCategoryId);
   const setSelectedIdeaId = useStore((s) => s.setSelectedIdeaId);
+  const openEditor = useStore((s) => s.openEditor);
   const markClean = useStore((s) => s.markClean);
+  const openCard = useStore((s) => s.openCard);
 
   const idea = useIdea(editingIdeaId);
   const projects = useAllProjects();
@@ -153,7 +166,7 @@ export function EditorPanel() {
     let targetCtx: EditorContext;
     let values: { title: string; prompt: string; tags: string[]; projectId: number };
 
-    if (editingIdeaId && idea) {
+    if (editingIdeaId && idea && idea.id === editingIdeaId) {
       targetCtx = { kind: 'idea', ideaId: editingIdeaId, projectId: idea.projectId ?? null, categoryId: getCategoryId(idea.projectId ?? null, projects) };
       values = {
         title: idea.title ?? '',
@@ -162,7 +175,8 @@ export function EditorPanel() {
         projectId: idea.projectId ?? UNASSIGNED_PROJECT_ID,
       };
     } else if (editingIdeaId) {
-      // 正在编辑但 idea 尚未加载完成（live query 异步）：本次不重置，等加载完成
+      // 正在编辑但 idea 尚未加载完成，或 live query 仍返回上一个 id 的旧值：
+      // 本次不重置、也不加载，等与 editingIdeaId 匹配的数据就绪后再处理
       return;
     } else {
       targetCtx = { kind: 'new', ideaId: null, projectId: selectedProjectId, categoryId: selectedCategoryId };
@@ -183,6 +197,21 @@ export function EditorPanel() {
 
     loadIntoEditor(targetCtx, values);
   }, [isEditorOpen, editingIdeaId, idea, selectedProjectId, selectedCategoryId, projects, context, loadIntoEditor, hasUnsavedChanges]);
+
+  // 编辑器关闭时统一重置本地表单、快照与上下文，
+  // 避免上一次编辑残留的 dirty 状态在下次点击时被误判为「未保存的更改」。
+  useEffect(() => {
+    if (isEditorOpen) return;
+    setTitle('');
+    setPrompt('');
+    setTags([]);
+    setTagInput('');
+    setProjectId(null);
+    setShowUnsavedDialog(false);
+    pendingLoadRef.current = null;
+    lastCleanSnapshot.current = { title: '', prompt: '', tags: [], projectId: null };
+    setContext({ kind: 'new', ideaId: null, projectId: null, categoryId: null });
+  }, [isEditorOpen]);
 
   // 标签输入处理
   const handleTagKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
@@ -260,6 +289,12 @@ export function EditorPanel() {
     const now = new Date();
 
     if (editingIdeaId) {
+      // 记录编辑前的状态，用于计算成长增量（编辑/标签/变量）
+      const prevTags = new Set((idea?.tags ?? []).map((t) => t.toLowerCase()));
+      const promptChanged = idea ? idea.prompt !== prompt : false;
+      const newTags = finalTags.filter((t) => !prevTags.has(t.toLowerCase())).length;
+      const newVars = Math.max(0, countVariables(prompt) - countVariables(idea?.prompt ?? ''));
+
       await db.ideas.update(editingIdeaId, {
         title: finalTitle,
         prompt,
@@ -267,22 +302,35 @@ export function EditorPanel() {
         projectId: finalProjectId,
         updatedAt: now,
       });
+      await recordIdeaEdited(editingIdeaId, { promptChanged, newTags, newVars });
       toast.success('灵感已更新');
     } else {
-      await db.ideas.add({
+      const id = await db.ideas.add({
         title: finalTitle,
         prompt,
         tags: finalTags,
         projectId: finalProjectId,
         createdAt: now,
         updatedAt: now,
+        ...newIdeaGrowthDefaults(now),
+        eloRating: 1000,
+        pkWins: 0,
+        pkLosses: 0,
+        pkMatches: 0,
       });
+      await recordIdeaCreated(id);
       toast.success('灵感已创建');
     }
 
     markClean();
     lastCleanSnapshot.current = { title: finalTitle, prompt, tags: [...finalTags], projectId: finalProjectId ?? UNASSIGNED_PROJECT_ID };
     closeEditor();
+  };
+
+  // 从空状态新建灵感
+  const handleNew = () => {
+    setSelectedIdeaId(null);
+    openEditor();
   };
 
   // 删除
@@ -330,6 +378,20 @@ export function EditorPanel() {
     return () => window.removeEventListener('keydown', handler);
   }, [isEditorOpen, deleteConfirmId, showUnsavedDialog, title, prompt, tags, projectId, editingIdeaId, hasUnsavedChanges, handleCloseRequest]);
 
+  // 浇灌：消耗 10 能量，成长值 +10
+  const handleWater = async () => {
+    if (!editingIdeaId) return;
+    const ok = await waterIdea(editingIdeaId);
+    if (ok) {
+      toast.success('💧 浇灌成功，成长值 +10');
+    } else {
+      toast.error('能量不足，完成任务可获得能量');
+    }
+  };
+
+  const rarity = idea ? computeRarity(idea) : null;
+  const growthLevel = idea ? (idea.growthLevel ?? computeGrowthLevel(idea.growthPoints ?? 0)) : null;
+
   return (
     <>
     {/* 未保存确认对话框 */}
@@ -368,15 +430,20 @@ export function EditorPanel() {
       </DialogContent>
     </Dialog>
 
-    <AnimatePresence>
-    {isEditorOpen && (
+    {/* 中间主面板：始终占据主区域，打开时显示表单，关闭时显示空状态 */}
     <motion.div
-      className="w-[380px] shrink-0 border-l border-border bg-background flex flex-col"
-      initial={{ opacity: 0, x: 24 }}
-      animate={{ opacity: 1, x: 0 }}
-      exit={{ opacity: 0, x: 24 }}
-      transition={{ duration: 0.2, ease: 'easeOut' }}
+      className="flex-1 min-w-0 bg-background flex flex-col"
     >
+      <AnimatePresence mode="wait" initial={false}>
+      {isEditorOpen ? (
+      <motion.div
+        key="editor"
+        className="flex-1 min-h-0 flex flex-col"
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        exit={{ opacity: 0 }}
+        transition={{ duration: 0.15, ease: 'easeOut' }}
+      >
       {/* 头部 */}
       <div className="flex items-center justify-between px-4 py-3 border-b border-border">
         <h2 className="text-sm font-medium">
@@ -387,8 +454,17 @@ export function EditorPanel() {
         </Button>
       </div>
 
-      {/* 表单 */}
-      <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-4">
+      {/* 元信息：稀有度 + 成长阶段（仅编辑已有灵感时） */}
+      {editingIdeaId && idea && rarity && growthLevel && (
+        <div className="flex items-center gap-2.5 px-4 py-2 border-b border-border bg-muted/20">
+          <RarityBadge level={rarity.level} score={rarity.score} />
+          <GrowthTag level={growthLevel} points={idea.growthPoints ?? 0} />
+          <span className="text-[11px] text-muted-foreground ml-auto">评分依据：变量/长度/标签/结构/标题</span>
+        </div>
+      )}
+
+      {/* 表单（max-w 约束行宽，大屏下保持可读性） */}
+      <div className="flex-1 overflow-y-auto p-4 flex flex-col gap-4 mx-auto w-full max-w-3xl">
         {/* 标题 */}
         <div className="flex flex-col gap-1.5">
           <label className="text-sm text-muted-foreground">
@@ -497,14 +573,47 @@ export function EditorPanel() {
           保存
         </Button>
         {editingIdeaId && (
-          <Button variant="destructive" size="icon" onClick={handleDelete}>
-            <Trash2 strokeWidth={1.5} />
-          </Button>
+          <>
+            <Button variant="outline" size="icon" onClick={() => openCard(editingIdeaId)} title="生成灵感卡片">
+              <ImageIcon strokeWidth={1.5} />
+            </Button>
+            <Button variant="outline" size="icon" onClick={handleWater} title="浇灌（消耗 10 能量，成长值 +10）">
+              <Droplets strokeWidth={1.5} />
+            </Button>
+            <Button variant="destructive" size="icon" onClick={handleDelete} title="删除">
+              <Trash2 strokeWidth={1.5} />
+            </Button>
+          </>
         )}
       </div>
+      </motion.div>
+      ) : (
+      <motion.div
+        key="empty"
+        className="flex-1 flex flex-col items-center justify-center gap-4 p-8"
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        exit={{ opacity: 0 }}
+        transition={{ duration: 0.15, ease: 'easeOut' }}
+      >
+        <div className="flex flex-col items-center gap-2.5 text-center">
+          <Sparkles className="size-12 text-green-600/60" strokeWidth={1.5} />
+          <h2 className="text-lg font-semibold">记录一条灵感</h2>
+          <p className="text-sm text-muted-foreground max-w-xs">
+            从右侧列表选择一条灵感查看详情，或新建一条开始记录
+          </p>
+        </div>
+        <Button onClick={handleNew}>
+          <Plus strokeWidth={1.5} className="mr-1.5" />
+          新建灵感
+        </Button>
+        <p className="text-xs text-muted-foreground/70">快捷键 Ctrl+N</p>
+      </motion.div>
+      )}
+      </AnimatePresence>
     </motion.div>
-    )}
-    </AnimatePresence>
     </>
   );
 }
+
+export default EditorPanel;

@@ -15,13 +15,15 @@ interface VariableDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   prompt: string;
+  /** 复制成功后回调（用于记录复制行为） */
+  onCopied?: () => void;
 }
 
 /**
  * 变量填空对话框
  * 解析 prompt 中的 {{变量名}}，显示输入框，替换后复制到剪贴板
  */
-export function VariableDialog({ open, onOpenChange, prompt }: VariableDialogProps) {
+export function VariableDialog({ open, onOpenChange, prompt, onCopied }: VariableDialogProps) {
   // 解析所有变量名
   const variables = useMemo(() => {
     const matches = prompt.match(/\{\{(\w+)\}\}/g);
@@ -72,6 +74,7 @@ export function VariableDialog({ open, onOpenChange, prompt }: VariableDialogPro
       }
     }
     onOpenChange(false);
+    onCopied?.();
   };
 
   return (
